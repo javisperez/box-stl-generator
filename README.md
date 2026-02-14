@@ -2,6 +2,8 @@
 
 A web-based parametric 3D box generator for 3D printing. Create custom boxes with adjustable dimensions, internal compartments, optional lids with text engraving/embossing, and more. Export directly to STL format for Bambu Studio or any 3D printing slicer.
 
+**Try it live:** [https://javisperez.github.io/box-stl-generator/](https://javisperez.github.io/box-stl-generator/)
+
 ## Features
 
 - **Real-time 3D Preview** - See your box update live as you adjust parameters
