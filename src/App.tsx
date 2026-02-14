@@ -4,6 +4,7 @@ import { ControlPanel } from './components/ControlPanel'
 import { generateBox, generateLid, jscadToThreeGeometry, BoxParams } from './utils/boxGenerator'
 import { textToJscadGeometry } from './utils/textGenerator'
 import { exportJscadToSTL } from './utils/stlExporter'
+import { Github } from 'lucide-react'
 import * as THREE from 'three'
 
 const STORAGE_KEY = '3d-box-generator-project'
@@ -91,11 +92,22 @@ function App() {
   return (
     <div className="min-h-screen bg-background p-4">
       <div className="max-w-7xl mx-auto">
-        <header className="mb-6">
-          <h1 className="text-4xl font-bold mb-2">3D Box Generator</h1>
-          <p className="text-muted-foreground">
-            Create custom parametric boxes for 3D printing
-          </p>
+        <header className="mb-6 flex items-start justify-between">
+          <div>
+            <h1 className="text-4xl font-bold mb-2">3D Box Generator</h1>
+            <p className="text-muted-foreground">
+              Create custom parametric boxes for 3D printing
+            </p>
+          </div>
+          <a
+            href="https://github.com/javisperez/box-stl-generator"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-muted-foreground hover:text-foreground transition-colors mt-2"
+            title="View on GitHub"
+          >
+            <Github size={24} />
+          </a>
         </header>
 
         <div className="grid lg:grid-cols-[1fr_400px] gap-6">
@@ -120,6 +132,36 @@ function App() {
             />
           </div>
         </div>
+
+        <footer className="mt-8 py-4 border-t border-border text-center text-sm text-muted-foreground">
+          Made by{' '}
+          <a
+            href="https://github.com/javisperez"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:text-foreground transition-colors"
+          >
+            Javis Perez
+          </a>
+          {' '}&amp;{' '}
+          <a
+            href="https://claude.ai"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:text-foreground transition-colors"
+          >
+            Claude
+          </a>
+          {' '}&middot;{' '}
+          <a
+            href="https://github.com/javisperez/box-stl-generator"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:text-foreground transition-colors"
+          >
+            Source on GitHub
+          </a>
+        </footer>
       </div>
     </div>
   )
