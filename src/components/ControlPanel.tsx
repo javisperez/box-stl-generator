@@ -529,6 +529,20 @@ export function ControlPanel({ params, onParamsChange, onExport, onExportLid, on
 
             <div className="space-y-2">
               <div className="flex justify-between items-center">
+                <Label>Chamfer (mm)</Label>
+                <span className="text-sm text-muted-foreground">{params.chamferSize}</span>
+              </div>
+              <Slider
+                min={0}
+                max={Math.min(params.wallThickness, params.width / 4, params.depth / 4)}
+                step={0.5}
+                value={params.chamferSize}
+                onValueChange={(value) => updateParam('chamferSize', value)}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex justify-between items-center">
                 <Label>X Divisions</Label>
                 <span className="text-sm text-muted-foreground">{params.divisionsX.length}</span>
               </div>

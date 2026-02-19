@@ -23,6 +23,7 @@ const DEFAULTS: BoxParams = {
   lidTextDepth: 0.8,
   lidTextSize: 16,
   lidTextStyle: 'engraved' as const,
+  chamferSize: 0,
 }
 
 function loadSavedParams(): BoxParams {
