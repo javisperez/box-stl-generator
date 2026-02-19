@@ -11,10 +11,24 @@ interface Triangle {
   v3: [number, number, number]
 }
 
+// Apply JSCAD transform matrix to a vertex
+function applyTransform(v: number[], m: number[]): [number, number, number] {
+  return [
+    m[0] * v[0] + m[4] * v[1] + m[8] * v[2] + m[12],
+    m[1] * v[0] + m[5] * v[1] + m[9] * v[2] + m[13],
+    m[2] * v[0] + m[6] * v[1] + m[10] * v[2] + m[14],
+  ]
+}
+
 function jscadToTriangles(jscadGeom: any): Triangle[] {
   if (!jscadGeom.polygons || jscadGeom.polygons.length === 0) {
     return []
   }
+
+  // Check for JSCAD transform matrix (column-major 4x4)
+  const m = jscadGeom.transforms as number[] | undefined
+  const hasTransform = m && m.length === 16 &&
+    !(m[0] === 1 && m[5] === 1 && m[10] === 1 && m[12] === 0 && m[13] === 0 && m[14] === 0)
 
   const triangles: Triangle[] = []
 
@@ -24,11 +38,19 @@ function jscadToTriangles(jscadGeom: any): Triangle[] {
 
     // Fan-triangulate each polygon
     for (let i = 1; i < verts.length - 1; i++) {
-      triangles.push({
-        v1: [verts[0][0], verts[0][1], verts[0][2]],
-        v2: [verts[i][0], verts[i][1], verts[i][2]],
-        v3: [verts[i + 1][0], verts[i + 1][1], verts[i + 1][2]],
-      })
+      if (hasTransform && m) {
+        triangles.push({
+          v1: applyTransform(verts[0], m),
+          v2: applyTransform(verts[i], m),
+          v3: applyTransform(verts[i + 1], m),
+        })
+      } else {
+        triangles.push({
+          v1: [verts[0][0], verts[0][1], verts[0][2]],
+          v2: [verts[i][0], verts[i][1], verts[i][2]],
+          v3: [verts[i + 1][0], verts[i + 1][1], verts[i + 1][2]],
+        })
+      }
     }
   }
 

@@ -1,9 +1,10 @@
-import { primitives, booleans, transforms } from '@jscad/modeling'
+import { primitives, booleans, transforms, extrusions } from '@jscad/modeling'
 import * as THREE from 'three'
 
-const { cuboid } = primitives
+const { cuboid, polygon } = primitives
 const { subtract, union } = booleans
 const { translate, mirrorX } = transforms
+const { extrudeLinear } = extrusions
 
 export interface BoxParams {
   width: number
@@ -19,13 +20,15 @@ export interface BoxParams {
   lidTextDepth: number
   lidTextSize: number
   lidTextStyle: 'engraved' | 'embossed'
+  chamferSize: number        // 45° chamfer on outer vertical edges (0 = none)
 }
 
 // Direct geometry construction — no CSG, guaranteed manifold
 export function generateBox(params: BoxParams) {
-  const { width, depth, height, wallThickness, divisionsX, divisionsZ } = params
+  const { width, depth, height, wallThickness, divisionsX, divisionsZ, chamferSize } = params
   const w2 = width / 2, d2 = depth / 2, h2 = height / 2
   const wt = wallThickness
+  const c = Math.min(chamferSize, wt, width / 4, depth / 4) // clamped chamfer
   const iw = width - 2 * wt, id = depth - 2 * wt
   const iw2 = iw / 2, id2 = id / 2
   const fl = -h2 + wt // floor Z
@@ -45,6 +48,10 @@ export function generateBox(params: BoxParams) {
   // Full breakpoints (outer + inner)
   const xAll = [-w2, ...xIn, w2]
   const yAll = [-d2, ...yIn, d2]
+
+  // Chamfer breakpoints (add intermediate points for chamfer edges)
+  const xAllC = c > 0 ? [-w2, -w2 + c, ...xIn, w2 - c, w2] : xAll
+  const yAllC = c > 0 ? [-d2, -d2 + c, ...yIn, d2 - c, d2] : yAll
 
   type V = [number, number, number]
   const polys: { vertices: V[] }[] = []
@@ -69,17 +76,76 @@ export function generateBox(params: BoxParams) {
       }
   }
 
-  // === OUTER FACES ===
-  // Bottom (N = -Z)
-  grid(xAll, yAll, (x0, x1, y0, y1) => [[x0,y0,-h2],[x0,y1,-h2],[x1,y1,-h2],[x1,y0,-h2]])
-  // Front (N = -Y)
-  grid(xAll, [-h2, h2], (x0, x1, z0, z1) => [[x0,-d2,z0],[x1,-d2,z0],[x1,-d2,z1],[x0,-d2,z1]])
-  // Back (N = +Y)
-  grid(xAll, [-h2, h2], (x0, x1, z0, z1) => [[x1,d2,z0],[x0,d2,z0],[x0,d2,z1],[x1,d2,z1]])
-  // Right (N = +X)
-  grid(yAll, [-h2, h2], (y0, y1, z0, z1) => [[w2,y0,z0],[w2,y1,z0],[w2,y1,z1],[w2,y0,z1]])
-  // Left (N = -X)
-  grid(yAll, [-h2, h2], (y0, y1, z0, z1) => [[- w2,y1,z0],[-w2,y0,z0],[-w2,y0,z1],[-w2,y1,z1]])
+  // Helper: check if a coordinate is at the outer boundary
+  const atMinX = (x: number) => Math.abs(x - (-w2)) < 0.001
+  const atMaxX = (x: number) => Math.abs(x - w2) < 0.001
+  const atMinY = (y: number) => Math.abs(y - (-d2)) < 0.001
+  const atMaxY = (y: number) => Math.abs(y - d2) < 0.001
+
+  if (c > 0) {
+    // === CHAMFERED OUTER FACES ===
+
+    // Bottom (N = -Z) — corner cells become pentagons
+    for (let i = 0; i < xAllC.length - 1; i++) {
+      for (let j = 0; j < yAllC.length - 1; j++) {
+        const x0 = xAllC[i], x1 = xAllC[i + 1], y0 = yAllC[j], y1 = yAllC[j + 1]
+        // Identify corner cells (first/last in both x and y)
+        const isFirstX = i === 0, isLastX = i === xAllC.length - 2
+        const isFirstY = j === 0, isLastY = j === yAllC.length - 2
+        if (isFirstX && isFirstY) {
+          // Bottom-left corner: cut (-w2,-d2) → pentagon
+          polys.push({ vertices: [[x1,y0,-h2],[x0,y1,-h2],[x1,y1,-h2]] })
+        } else if (isLastX && isFirstY) {
+          // Bottom-right corner
+          polys.push({ vertices: [[x0,y0,-h2],[x0,y1,-h2],[x1,y1,-h2]] })
+        } else if (isFirstX && isLastY) {
+          // Top-left corner
+          polys.push({ vertices: [[x0,y0,-h2],[x1,y0,-h2],[x1,y1,-h2]] })
+        } else if (isLastX && isLastY) {
+          // Top-right corner
+          polys.push({ vertices: [[x0,y0,-h2],[x1,y0,-h2],[x0,y1,-h2]] })
+        } else {
+          // Regular quad
+          polys.push({ vertices: [[x0,y0,-h2],[x0,y1,-h2],[x1,y1,-h2],[x1,y0,-h2]] })
+        }
+      }
+    }
+
+    // Front wall (N = -Y) — trimmed: x from -w2+c to w2-c
+    grid(xAllC, [-h2, h2], (x0, x1, z0, z1) => [[x0,-d2,z0],[x1,-d2,z0],[x1,-d2,z1],[x0,-d2,z1]],
+      (x0, x1) => atMinX(x0) || atMaxX(x1))
+    // Back wall (N = +Y)
+    grid(xAllC, [-h2, h2], (x0, x1, z0, z1) => [[x1,d2,z0],[x0,d2,z0],[x0,d2,z1],[x1,d2,z1]],
+      (x0, x1) => atMinX(x0) || atMaxX(x1))
+    // Right wall (N = +X) — trimmed: y from -d2+c to d2-c
+    grid(yAllC, [-h2, h2], (y0, y1, z0, z1) => [[w2,y0,z0],[w2,y1,z0],[w2,y1,z1],[w2,y0,z1]],
+      (y0, y1) => atMinY(y0) || atMaxY(y1))
+    // Left wall (N = -X)
+    grid(yAllC, [-h2, h2], (y0, y1, z0, z1) => [[-w2,y1,z0],[-w2,y0,z0],[-w2,y0,z1],[-w2,y1,z1]],
+      (y0, y1) => atMinY(y0) || atMaxY(y1))
+
+    // 4 chamfer face strips (vertical, full height)
+    // Front-left: from (-w2, -d2+c) to (-w2+c, -d2)
+    polys.push({ vertices: [[-w2+c,-d2,-h2],[-w2,-d2+c,-h2],[-w2,-d2+c,h2],[-w2+c,-d2,h2]] })
+    // Front-right: from (w2-c, -d2) to (w2, -d2+c)
+    polys.push({ vertices: [[w2,-d2+c,-h2],[w2-c,-d2,-h2],[w2-c,-d2,h2],[w2,-d2+c,h2]] })
+    // Back-right: from (w2, d2-c) to (w2-c, d2)
+    polys.push({ vertices: [[w2-c,d2,-h2],[w2,d2-c,-h2],[w2,d2-c,h2],[w2-c,d2,h2]] })
+    // Back-left: from (-w2+c, d2) to (-w2, d2-c)
+    polys.push({ vertices: [[-w2,d2-c,-h2],[-w2+c,d2,-h2],[-w2+c,d2,h2],[-w2,d2-c,h2]] })
+  } else {
+    // === ORIGINAL OUTER FACES (no chamfer) ===
+    // Bottom (N = -Z)
+    grid(xAll, yAll, (x0, x1, y0, y1) => [[x0,y0,-h2],[x0,y1,-h2],[x1,y1,-h2],[x1,y0,-h2]])
+    // Front (N = -Y)
+    grid(xAll, [-h2, h2], (x0, x1, z0, z1) => [[x0,-d2,z0],[x1,-d2,z0],[x1,-d2,z1],[x0,-d2,z1]])
+    // Back (N = +Y)
+    grid(xAll, [-h2, h2], (x0, x1, z0, z1) => [[x1,d2,z0],[x0,d2,z0],[x0,d2,z1],[x1,d2,z1]])
+    // Right (N = +X)
+    grid(yAll, [-h2, h2], (y0, y1, z0, z1) => [[w2,y0,z0],[w2,y1,z0],[w2,y1,z1],[w2,y0,z1]])
+    // Left (N = -X)
+    grid(yAll, [-h2, h2], (y0, y1, z0, z1) => [[-w2,y1,z0],[-w2,y0,z0],[-w2,y0,z1],[-w2,y1,z1]])
+  }
 
   // === INNER FLOOR (N = +Z) ===
   grid(xIn, yIn,
@@ -105,15 +171,42 @@ export function generateBox(params: BoxParams) {
     (y0, y1) => isYDiv(y0, y1))
 
   // === TOP SURFACE (N = +Z) — rim + divider tops ===
-  grid(xAll, yAll,
-    (x0, x1, y0, y1) => [[x0,y0,h2],[x1,y0,h2],[x1,y1,h2],[x0,y1,h2]],
-    (x0, x1, y0, y1) => {
-      // Keep rim (outside inner area) and divider tops; skip cavity openings
-      const inX = x0 >= -iw2 - 0.001 && x1 <= iw2 + 0.001
-      const inY = y0 >= -id2 - 0.001 && y1 <= id2 + 0.001
-      if (!inX || !inY) return false // rim — keep
-      return !isXDiv(x0, x1) && !isYDiv(y0, y1) // cavity — skip
-    })
+  if (c > 0) {
+    const xT = xAllC, yT = yAllC
+    for (let i = 0; i < xT.length - 1; i++) {
+      for (let j = 0; j < yT.length - 1; j++) {
+        const x0 = xT[i], x1 = xT[i + 1], y0 = yT[j], y1 = yT[j + 1]
+        // Skip cavity openings (inside inner area, not on a divider)
+        const inX = x0 >= -iw2 - 0.001 && x1 <= iw2 + 0.001
+        const inY = y0 >= -id2 - 0.001 && y1 <= id2 + 0.001
+        if (inX && inY && !isXDiv(x0, x1) && !isYDiv(y0, y1)) continue
+
+        const isFirstX = i === 0, isLastX = i === xT.length - 2
+        const isFirstY = j === 0, isLastY = j === yT.length - 2
+        if (isFirstX && isFirstY) {
+          polys.push({ vertices: [[x1,y0,h2],[x1,y1,h2],[x0,y1,h2]] })
+        } else if (isLastX && isFirstY) {
+          polys.push({ vertices: [[x0,y0,h2],[x0,y1,h2],[x1,y1,h2]] })
+        } else if (isFirstX && isLastY) {
+          polys.push({ vertices: [[x0,y0,h2],[x1,y0,h2],[x1,y1,h2]] })
+        } else if (isLastX && isLastY) {
+          polys.push({ vertices: [[x0,y0,h2],[x1,y0,h2],[x0,y1,h2]] })
+        } else {
+          polys.push({ vertices: [[x0,y0,h2],[x1,y0,h2],[x1,y1,h2],[x0,y1,h2]] })
+        }
+      }
+    }
+  } else {
+    grid(xAll, yAll,
+      (x0, x1, y0, y1) => [[x0,y0,h2],[x1,y0,h2],[x1,y1,h2],[x0,y1,h2]],
+      (x0, x1, y0, y1) => {
+        // Keep rim (outside inner area) and divider tops; skip cavity openings
+        const inX = x0 >= -iw2 - 0.001 && x1 <= iw2 + 0.001
+        const inY = y0 >= -id2 - 0.001 && y1 <= id2 + 0.001
+        if (!inX || !inY) return false // rim — keep
+        return !isXDiv(x0, x1) && !isYDiv(y0, y1) // cavity — skip
+      })
+  }
 
   // === X-DIVIDER WALL FACES ===
   for (const xd of xDivs) {
@@ -156,9 +249,10 @@ export function generateLid(params: BoxParams, textGeometry?: any) {
 // Uses a heightmap grid: cap cells have top=0, lip wall cells have top=lidHeight.
 // Vertical step faces are generated automatically where heights differ.
 function generateFlatLid(params: BoxParams) {
-  const { width, depth, wallThickness: wt, lidHeight: lh, lidTolerance: tol, divisionsX, divisionsZ } = params
+  const { width, depth, wallThickness: wt, lidHeight: lh, lidTolerance: tol, divisionsX, divisionsZ, chamferSize } = params
 
   const w2 = width / 2, d2 = depth / 2
+  const c = Math.min(chamferSize, wt, width / 4, depth / 4) // clamped chamfer
 
   // Lip dimensions
   const low2 = w2 - wt - tol       // lip outer half-width
@@ -178,11 +272,13 @@ function generateFlatLid(params: BoxParams) {
 
   // Build breakpoints (sorted, deduplicated via Set)
   const xSet = new Set([-w2, -low2, low2, w2])
+  if (c > 0) { xSet.add(-w2 + c); xSet.add(w2 - c) }
   if (liw2 > 0.01) { xSet.add(-liw2); xSet.add(liw2) }
   for (const xn of xNotches) { xSet.add(xn - sw / 2); xSet.add(xn + sw / 2) }
   const xB = [...xSet].sort((a, b) => a - b)
 
   const ySet = new Set([-d2, -lod2, lod2, d2])
+  if (c > 0) { ySet.add(-d2 + c); ySet.add(d2 - c) }
   if (lid2 > 0.01) { ySet.add(-lid2); ySet.add(lid2) }
   for (const yn of yNotches) { ySet.add(yn - sw / 2); ySet.add(yn + sw / 2) }
   const yB = [...ySet].sort((a, b) => a - b)
@@ -223,13 +319,30 @@ function generateFlatLid(params: BoxParams) {
     }
   }
 
+  // Helper: is this the corner chamfer cell?
+  const isChamferCorner = (i: number, j: number) =>
+    c > 0 && ((i === 0 || i === nx - 1) && (j === 0 || j === ny - 1))
+
   // === BOTTOM FACE (Z = -wt, N = -Z) ===
   for (let i = 0; i < nx; i++) {
     for (let j = 0; j < ny; j++) {
-      polys.push({ vertices: [
-        [xB[i], yB[j], -wt], [xB[i], yB[j + 1], -wt],
-        [xB[i + 1], yB[j + 1], -wt], [xB[i + 1], yB[j], -wt]
-      ]})
+      if (isChamferCorner(i, j)) {
+        // Triangle — cut the outer corner
+        if (i === 0 && j === 0) {
+          polys.push({ vertices: [[xB[1],yB[0],-wt],[xB[0],yB[1],-wt],[xB[1],yB[1],-wt]] })
+        } else if (i === nx - 1 && j === 0) {
+          polys.push({ vertices: [[xB[nx - 1],yB[0],-wt],[xB[nx - 1],yB[1],-wt],[xB[nx],yB[1],-wt]] })
+        } else if (i === 0 && j === ny - 1) {
+          polys.push({ vertices: [[xB[0],yB[ny - 1],-wt],[xB[1],yB[ny - 1],-wt],[xB[1],yB[ny],-wt]] })
+        } else {
+          polys.push({ vertices: [[xB[nx - 1],yB[ny - 1],-wt],[xB[nx],yB[ny - 1],-wt],[xB[nx - 1],yB[ny],-wt]] })
+        }
+      } else {
+        polys.push({ vertices: [
+          [xB[i], yB[j], -wt], [xB[i], yB[j + 1], -wt],
+          [xB[i + 1], yB[j + 1], -wt], [xB[i + 1], yB[j], -wt]
+        ]})
+      }
     }
   }
 
@@ -237,47 +350,103 @@ function generateFlatLid(params: BoxParams) {
   for (let i = 0; i < nx; i++) {
     for (let j = 0; j < ny; j++) {
       const z = tops[i][j]
-      polys.push({ vertices: [
-        [xB[i], yB[j], z], [xB[i + 1], yB[j], z],
-        [xB[i + 1], yB[j + 1], z], [xB[i], yB[j + 1], z]
-      ]})
+      if (isChamferCorner(i, j)) {
+        if (i === 0 && j === 0) {
+          polys.push({ vertices: [[xB[1],yB[0],z],[xB[1],yB[1],z],[xB[0],yB[1],z]] })
+        } else if (i === nx - 1 && j === 0) {
+          polys.push({ vertices: [[xB[nx - 1],yB[0],z],[xB[nx],yB[1],z],[xB[nx - 1],yB[1],z]] })
+        } else if (i === 0 && j === ny - 1) {
+          polys.push({ vertices: [[xB[0],yB[ny - 1],z],[xB[1],yB[ny - 1],z],[xB[1],yB[ny],z]] })
+        } else {
+          polys.push({ vertices: [[xB[nx - 1],yB[ny - 1],z],[xB[nx - 1],yB[ny],z],[xB[nx],yB[ny - 1],z]] })
+        }
+      } else {
+        polys.push({ vertices: [
+          [xB[i], yB[j], z], [xB[i + 1], yB[j], z],
+          [xB[i + 1], yB[j + 1], z], [xB[i], yB[j + 1], z]
+        ]})
+      }
     }
   }
 
   // === OUTER BOUNDARY WALLS ===
-  // Left (X = -w2, N = -X)
-  for (let j = 0; j < ny; j++) {
-    polys.push({ vertices: [
-      [-w2, yB[j + 1], -wt], [-w2, yB[j], -wt],
-      [-w2, yB[j], tops[0][j]], [-w2, yB[j + 1], tops[0][j]]
-    ]})
-  }
-  // Right (X = w2, N = +X)
-  for (let j = 0; j < ny; j++) {
-    polys.push({ vertices: [
-      [w2, yB[j], -wt], [w2, yB[j + 1], -wt],
-      [w2, yB[j + 1], tops[nx - 1][j]], [w2, yB[j], tops[nx - 1][j]]
-    ]})
-  }
-  // Front (Y = -d2, N = -Y)
-  for (let i = 0; i < nx; i++) {
-    polys.push({ vertices: [
-      [xB[i], -d2, -wt], [xB[i + 1], -d2, -wt],
-      [xB[i + 1], -d2, tops[i][0]], [xB[i], -d2, tops[i][0]]
-    ]})
-  }
-  // Back (Y = d2, N = +Y)
-  for (let i = 0; i < nx; i++) {
-    polys.push({ vertices: [
-      [xB[i + 1], d2, -wt], [xB[i], d2, -wt],
-      [xB[i], d2, tops[i][ny - 1]], [xB[i + 1], d2, tops[i][ny - 1]]
-    ]})
+  if (c > 0) {
+    // Left (X = -w2, N = -X) — skip first and last (corner) cells
+    for (let j = 1; j < ny - 1; j++) {
+      polys.push({ vertices: [
+        [-w2, yB[j + 1], -wt], [-w2, yB[j], -wt],
+        [-w2, yB[j], tops[0][j]], [-w2, yB[j + 1], tops[0][j]]
+      ]})
+    }
+    // Right (X = w2, N = +X)
+    for (let j = 1; j < ny - 1; j++) {
+      polys.push({ vertices: [
+        [w2, yB[j], -wt], [w2, yB[j + 1], -wt],
+        [w2, yB[j + 1], tops[nx - 1][j]], [w2, yB[j], tops[nx - 1][j]]
+      ]})
+    }
+    // Front (Y = -d2, N = -Y) — skip first and last
+    for (let i = 1; i < nx - 1; i++) {
+      polys.push({ vertices: [
+        [xB[i], -d2, -wt], [xB[i + 1], -d2, -wt],
+        [xB[i + 1], -d2, tops[i][0]], [xB[i], -d2, tops[i][0]]
+      ]})
+    }
+    // Back (Y = d2, N = +Y)
+    for (let i = 1; i < nx - 1; i++) {
+      polys.push({ vertices: [
+        [xB[i + 1], d2, -wt], [xB[i], d2, -wt],
+        [xB[i], d2, tops[i][ny - 1]], [xB[i + 1], d2, tops[i][ny - 1]]
+      ]})
+    }
+
+    // 4 chamfer face strips (corner diagonal walls)
+    // Corner tops are always wing height (0) since corners are outside the lip
+    const ct = 0 // corner top Z
+    // Front-left
+    polys.push({ vertices: [[-w2+c,-d2,-wt],[-w2,-d2+c,-wt],[-w2,-d2+c,ct],[-w2+c,-d2,ct]] })
+    // Front-right
+    polys.push({ vertices: [[w2,-d2+c,-wt],[w2-c,-d2,-wt],[w2-c,-d2,ct],[w2,-d2+c,ct]] })
+    // Back-right
+    polys.push({ vertices: [[w2-c,d2,-wt],[w2,d2-c,-wt],[w2,d2-c,ct],[w2-c,d2,ct]] })
+    // Back-left
+    polys.push({ vertices: [[-w2,d2-c,-wt],[-w2+c,d2,-wt],[-w2+c,d2,ct],[-w2,d2-c,ct]] })
+  } else {
+    // Left (X = -w2, N = -X)
+    for (let j = 0; j < ny; j++) {
+      polys.push({ vertices: [
+        [-w2, yB[j + 1], -wt], [-w2, yB[j], -wt],
+        [-w2, yB[j], tops[0][j]], [-w2, yB[j + 1], tops[0][j]]
+      ]})
+    }
+    // Right (X = w2, N = +X)
+    for (let j = 0; j < ny; j++) {
+      polys.push({ vertices: [
+        [w2, yB[j], -wt], [w2, yB[j + 1], -wt],
+        [w2, yB[j + 1], tops[nx - 1][j]], [w2, yB[j], tops[nx - 1][j]]
+      ]})
+    }
+    // Front (Y = -d2, N = -Y)
+    for (let i = 0; i < nx; i++) {
+      polys.push({ vertices: [
+        [xB[i], -d2, -wt], [xB[i + 1], -d2, -wt],
+        [xB[i + 1], -d2, tops[i][0]], [xB[i], -d2, tops[i][0]]
+      ]})
+    }
+    // Back (Y = d2, N = +Y)
+    for (let i = 0; i < nx; i++) {
+      polys.push({ vertices: [
+        [xB[i + 1], d2, -wt], [xB[i], d2, -wt],
+        [xB[i], d2, tops[i][ny - 1]], [xB[i + 1], d2, tops[i][ny - 1]]
+      ]})
+    }
   }
 
   // === INTERNAL VERTICAL FACES (height steps) ===
   // X boundaries (between columns i and i+1)
   for (let i = 0; i < nx - 1; i++) {
     for (let j = 0; j < ny; j++) {
+      if (isChamferCorner(i, j) || isChamferCorner(i + 1, j)) continue
       const tL = tops[i][j], tR = tops[i + 1][j]
       if (Math.abs(tL - tR) < 0.001) continue
       const x = xB[i + 1]
@@ -300,6 +469,7 @@ function generateFlatLid(params: BoxParams) {
   // Y boundaries (between rows j and j+1)
   for (let i = 0; i < nx; i++) {
     for (let j = 0; j < ny - 1; j++) {
+      if (isChamferCorner(i, j) || isChamferCorner(i, j + 1)) continue
       const tF = tops[i][j], tB = tops[i][j + 1]
       if (Math.abs(tF - tB) < 0.001) continue
       const y = yB[j + 1]
@@ -325,13 +495,14 @@ function generateFlatLid(params: BoxParams) {
 
 // CSG-based lid — only used when text is present (text requires subtract/union)
 function generateLidCSG(params: BoxParams, textGeometry: any) {
-  const { width, depth, wallThickness, lidHeight, lidTolerance, divisionsX, divisionsZ, lidTextStyle } = params
+  const { width, depth, wallThickness, lidHeight, lidTolerance, divisionsX, divisionsZ, lidTextStyle, chamferSize } = params
 
   const lipOuterWidth = width - wallThickness * 2 - lidTolerance * 2
   const lipOuterDepth = depth - wallThickness * 2 - lidTolerance * 2
   const lipInnerWidth = lipOuterWidth - wallThickness * 2
   const lipInnerDepth = lipOuterDepth - wallThickness * 2
   const fullHeight = wallThickness + lidHeight
+  const c = Math.min(chamferSize, wallThickness, width / 4, depth / 4)
 
   // 1. Full solid block encompassing cap + lip volume
   let lid: any = cuboid({ size: [width, depth, fullHeight] })
@@ -363,7 +534,24 @@ function generateLidCSG(params: BoxParams, textGeometry: any) {
     lid = subtract(lid, translate([0, yPos, lipCenterZ], slot))
   }
 
-  // 5. Apply text to the cap's bottom surface
+  // 5. Cut chamfers from outer vertical edges
+  if (c > 0) {
+    const w2 = width / 2, d2 = depth / 2
+    // All triangles must be CCW for valid JSCAD polygon extrusion
+    const cornerTris: [number, number][][] = [
+      [[-w2, -d2], [-w2 + c, -d2], [-w2, -d2 + c]],  // front-left
+      [[ w2, -d2], [ w2, -d2 + c], [ w2 - c, -d2]],  // front-right
+      [[ w2,  d2], [ w2 - c,  d2], [ w2,  d2 - c]],  // back-right
+      [[-w2,  d2], [-w2,  d2 - c], [-w2 + c,  d2]],  // back-left
+    ]
+    for (const points of cornerTris) {
+      const tri = polygon({ points })
+      const prism = extrudeLinear({ height: fullHeight + 2 }, tri)
+      lid = subtract(lid, translate([0, 0, -(fullHeight + 2) / 2], prism))
+    }
+  }
+
+  // 6. Apply text to the cap's bottom surface
   const mirrored = mirrorX(textGeometry)
   const capBottom = -fullHeight / 2
 
@@ -373,7 +561,7 @@ function generateLidCSG(params: BoxParams, textGeometry: any) {
     lid = union(lid, translate([0, 0, capBottom - params.lidTextDepth], mirrored))
   }
 
-  // 6. Translate to match expected coordinate system:
+  // 7. Translate to match expected coordinate system:
   // Cap bottom at -wallThickness, cap top at 0, lip extends upward to lidHeight
   return translate([0, 0, (lidHeight - wallThickness) / 2], lid)
 }
@@ -386,6 +574,11 @@ export function jscadToThreeGeometry(jscadGeom: any): THREE.BufferGeometry {
     return geometry
   }
 
+  // Apply JSCAD transform matrix if present (CSG results store translate/rotate in .transforms)
+  const m = jscadGeom.transforms as number[] | undefined
+  const hasTransform = m && m.length === 16 &&
+    !(m[0] === 1 && m[5] === 1 && m[10] === 1 && m[12] === 0 && m[13] === 0 && m[14] === 0)
+
   const vertices: number[] = []
   const indices: number[] = []
   let vertexIndex = 0
@@ -394,10 +587,19 @@ export function jscadToThreeGeometry(jscadGeom: any): THREE.BufferGeometry {
     const polyVertices = polygon.vertices
     if (polyVertices.length < 3) return
 
-    // Add all vertices for this polygon
+    // Add all vertices for this polygon, applying transform if needed
     for (let i = 0; i < polyVertices.length; i++) {
       const v = polyVertices[i]
-      vertices.push(v[0], v[1], v[2])
+      if (hasTransform && m) {
+        // Apply 4x4 column-major transform matrix
+        vertices.push(
+          m[0] * v[0] + m[4] * v[1] + m[8] * v[2] + m[12],
+          m[1] * v[0] + m[5] * v[1] + m[9] * v[2] + m[13],
+          m[2] * v[0] + m[6] * v[1] + m[10] * v[2] + m[14]
+        )
+      } else {
+        vertices.push(v[0], v[1], v[2])
+      }
     }
 
     // Fan triangulation: handles triangles, quads, and n-gons
