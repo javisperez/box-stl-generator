@@ -1,9 +1,12 @@
 import { useState, useEffect } from 'react'
 import { BoxViewer } from './components/BoxViewer'
 import { ControlPanel } from './components/ControlPanel'
-import { generateBox, generateLid, jscadToThreeGeometry, BoxParams } from './utils/boxGenerator'
+import {
+  generateBox, generateLid, jscadToThreeGeometry, BoxParams,
+  generateBoxHingeKnuckles, generateLidHingeKnuckles, generateHingePins,
+} from './utils/boxGenerator'
 import { textToJscadGeometry } from './utils/textGenerator'
-import { exportJscadToSTL } from './utils/stlExporter'
+import { exportJscadToSTL, exportMultipleJscadToSTL } from './utils/stlExporter'
 import { Github } from 'lucide-react'
 import * as THREE from 'three'
 
@@ -24,6 +27,10 @@ const DEFAULTS: BoxParams = {
   lidTextSize: 16,
   lidTextStyle: 'engraved' as const,
   chamferSize: 0,
+  includeHinge: false,
+  hingeCount: 1,
+  hingeDiameter: 8,
+  hingePinDiameter: 2.5,
 }
 
 function loadSavedParams(): BoxParams {
@@ -42,8 +49,13 @@ function App() {
 
   const [geometry, setGeometry] = useState<THREE.BufferGeometry | null>(null)
   const [lidGeometry, setLidGeometry] = useState<THREE.BufferGeometry | null>(null)
+  const [hingeBoxGeometry, setHingeBoxGeometry] = useState<THREE.BufferGeometry | null>(null)
+  const [hingeLidGeometry, setHingeLidGeometry] = useState<THREE.BufferGeometry | null>(null)
   const [boxJscad, setBoxJscad] = useState<any>(null)
   const [lidJscad, setLidJscad] = useState<any>(null)
+  const [hingeBoxJscad, setHingeBoxJscad] = useState<any>(null)
+  const [hingeLidJscad, setHingeLidJscad] = useState<any>(null)
+  const [hingePinJscad, setHingePinJscad] = useState<any>(null)
 
   useEffect(() => {
     try {
@@ -58,9 +70,31 @@ function App() {
         const lidJscadGeom = generateLid(params, textGeom ?? undefined)
         setLidJscad(lidJscadGeom)
         setLidGeometry(jscadToThreeGeometry(lidJscadGeom))
+
+        if (params.includeHinge) {
+          const hBox = generateBoxHingeKnuckles(params)
+          const hLid = generateLidHingeKnuckles(params)
+          const hPin = generateHingePins(params)
+          setHingeBoxJscad(hBox)
+          setHingeLidJscad(hLid)
+          setHingePinJscad(hPin)
+          setHingeBoxGeometry(jscadToThreeGeometry(hBox))
+          setHingeLidGeometry(jscadToThreeGeometry(hLid))
+        } else {
+          setHingeBoxJscad(null)
+          setHingeLidJscad(null)
+          setHingePinJscad(null)
+          setHingeBoxGeometry(null)
+          setHingeLidGeometry(null)
+        }
       } else {
         setLidJscad(null)
         setLidGeometry(null)
+        setHingeBoxJscad(null)
+        setHingeLidJscad(null)
+        setHingePinJscad(null)
+        setHingeBoxGeometry(null)
+        setHingeLidGeometry(null)
       }
     } catch (error) {
       console.error('Error generating box:', error)
@@ -68,16 +102,29 @@ function App() {
   }, [params])
 
   const handleExport = () => {
-    if (boxJscad) {
-      const filename = `box_${params.width}x${params.depth}x${params.height}.stl`
+    if (!boxJscad) return
+    const filename = `box_${params.width}x${params.depth}x${params.height}.stl`
+    if (hingeBoxJscad) {
+      exportMultipleJscadToSTL([boxJscad, hingeBoxJscad], filename)
+    } else {
       exportJscadToSTL(boxJscad, filename)
     }
   }
 
   const handleExportLid = () => {
-    if (lidJscad) {
-      const filename = `lid_${params.width}x${params.depth}x${params.height}.stl`
+    if (!lidJscad) return
+    const filename = `lid_${params.width}x${params.depth}x${params.height}.stl`
+    if (hingeLidJscad) {
+      exportMultipleJscadToSTL([lidJscad, hingeLidJscad], filename)
+    } else {
       exportJscadToSTL(lidJscad, filename)
+    }
+  }
+
+  const handleExportPin = () => {
+    if (hingePinJscad) {
+      const filename = `hinge_pin_${params.width}x${params.depth}x${params.height}.stl`
+      exportJscadToSTL(hingePinJscad, filename)
     }
   }
 
@@ -116,6 +163,8 @@ function App() {
             <BoxViewer
               geometry={geometry}
               lidGeometry={lidGeometry}
+              hingeBoxGeometry={hingeBoxGeometry}
+              hingeLidGeometry={hingeLidGeometry}
               boxHeight={params.height}
               boxWidth={params.width}
               wallThickness={params.wallThickness}
@@ -128,6 +177,7 @@ function App() {
               onParamsChange={setParams}
               onExport={handleExport}
               onExportLid={handleExportLid}
+              onExportPin={handleExportPin}
               onSave={handleSave}
               onReset={handleReset}
             />

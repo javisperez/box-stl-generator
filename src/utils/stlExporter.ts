@@ -5,6 +5,13 @@ export function exportJscadToSTL(jscadGeom: any, filename: string = 'box.stl') {
   downloadSTL(stl, filename)
 }
 
+// Export multiple JSCAD geometries into a single STL (triangles are concatenated)
+export function exportMultipleJscadToSTL(geoms: any[], filename: string = 'box.stl') {
+  const triangles = geoms.flatMap(g => jscadToTriangles(g))
+  const stl = trianglesToSTL(triangles)
+  downloadSTL(stl, filename)
+}
+
 interface Triangle {
   v1: [number, number, number]
   v2: [number, number, number]

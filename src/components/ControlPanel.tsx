@@ -10,6 +10,7 @@ interface ControlPanelProps {
   onParamsChange: (params: BoxParams) => void
   onExport: () => void
   onExportLid: () => void
+  onExportPin: () => void
   onSave: () => void
   onReset: () => void
 }
@@ -34,7 +35,7 @@ function evenPositions(count: number): number[] {
   return Array.from({ length: count }, (_, i) => Math.round((i + 1) * 100 / (count + 1)))
 }
 
-export function ControlPanel({ params, onParamsChange, onExport, onExportLid, onSave, onReset }: ControlPanelProps) {
+export function ControlPanel({ params, onParamsChange, onExport, onExportLid, onExportPin, onSave, onReset }: ControlPanelProps) {
   const [activeTab, setActiveTab] = useState<TabType>('generator')
   const [volume, setVolume] = useState(1000) // cubic mm
   const [printerBedX, setPrinterBedX] = useState(220) // mm
@@ -644,6 +645,70 @@ export function ControlPanel({ params, onParamsChange, onExport, onExportLid, on
                 </div>
 
                 <div className="pt-3 border-t space-y-4">
+                  <h4 className="text-sm font-semibold">Hinge</h4>
+
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={params.includeHinge}
+                      onChange={(e) => updateParam('includeHinge', e.target.checked)}
+                      className="h-4 w-4 rounded border-gray-300"
+                    />
+                    <span className="text-sm">Add barrel hinges</span>
+                  </label>
+
+                  {params.includeHinge && (
+                    <div className="space-y-4 pl-2">
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                          <Label>Number of hinges</Label>
+                          <span className="text-sm text-muted-foreground">{params.hingeCount}</span>
+                        </div>
+                        <Slider
+                          min={1}
+                          max={3}
+                          step={1}
+                          value={params.hingeCount}
+                          onValueChange={(value) => updateParam('hingeCount', value)}
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                          <Label>Barrel diameter (mm)</Label>
+                          <span className="text-sm text-muted-foreground">{params.hingeDiameter}</span>
+                        </div>
+                        <Slider
+                          min={6}
+                          max={14}
+                          step={0.5}
+                          value={params.hingeDiameter}
+                          onValueChange={(value) => updateParam('hingeDiameter', value)}
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                          <Label>Pin hole diameter (mm)</Label>
+                          <span className="text-sm text-muted-foreground">{params.hingePinDiameter}</span>
+                        </div>
+                        <Slider
+                          min={1.5}
+                          max={5}
+                          step={0.5}
+                          value={params.hingePinDiameter}
+                          onValueChange={(value) => updateParam('hingePinDiameter', value)}
+                        />
+                      </div>
+
+                      <p className="text-xs text-muted-foreground">
+                        Hinges are on the back edge (Y+). Print the lid with the hinge side up for best results. Export the pin separately and print one copy per hinge.
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="pt-3 border-t space-y-4">
                   <h4 className="text-sm font-semibold">Lid Text</h4>
 
                   <div className="space-y-2">
@@ -752,6 +817,12 @@ export function ControlPanel({ params, onParamsChange, onExport, onExportLid, on
                     <Download className="mr-2 h-4 w-4" />
                     Export Lid STL
                   </Button>
+                  {params.includeHinge && (
+                    <Button className="w-full mt-2" size="lg" variant="outline" onClick={onExportPin}>
+                      <Download className="mr-2 h-4 w-4" />
+                      Export Hinge Pin STL
+                    </Button>
+                  )}
                 </>
               ) : (
                 <p className="text-sm text-muted-foreground">Lid not enabled. Enable it in the Lid tab.</p>

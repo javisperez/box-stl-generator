@@ -1,9 +1,9 @@
 import { primitives, booleans, transforms, extrusions } from '@jscad/modeling'
 import * as THREE from 'three'
 
-const { cuboid, polygon } = primitives
+const { cuboid, polygon, cylinder } = primitives
 const { subtract, union } = booleans
-const { translate, mirrorX } = transforms
+const { translate, mirrorX, rotate } = transforms
 const { extrudeLinear } = extrusions
 
 export interface BoxParams {
@@ -21,6 +21,10 @@ export interface BoxParams {
   lidTextSize: number
   lidTextStyle: 'engraved' | 'embossed'
   chamferSize: number        // 45° chamfer on outer vertical edges (0 = none)
+  includeHinge: boolean
+  hingeCount: number         // number of hinges along the back edge (1–3)
+  hingeDiameter: number      // outer barrel diameter in mm
+  hingePinDiameter: number   // pin hole diameter in mm
 }
 
 // Direct geometry construction — no CSG, guaranteed manifold
@@ -249,7 +253,8 @@ export function generateLid(params: BoxParams, textGeometry?: any) {
 // Uses a heightmap grid: cap cells have top=0, lip wall cells have top=lidHeight.
 // Vertical step faces are generated automatically where heights differ.
 function generateFlatLid(params: BoxParams) {
-  const { width, depth, wallThickness: wt, lidHeight: lh, lidTolerance: tol, divisionsX, divisionsZ, chamferSize } = params
+  const { width, depth, height, wallThickness: wt, lidHeight: lhRaw, lidTolerance: tol, divisionsX, divisionsZ, chamferSize, includeHinge } = params
+  const lh = Math.min(lhRaw, height - wt)  // lip can't exceed inner box height
 
   const w2 = width / 2, d2 = depth / 2
   const c = Math.min(chamferSize, wt, width / 4, depth / 4) // clamped chamfer
@@ -296,6 +301,10 @@ function generateFlatLid(params: BoxParams) {
     // Inside lip inner → cavity
     if (liw2 > 0.01 && lid2 > 0.01 &&
         Math.abs(mx) < liw2 - 0.001 && Math.abs(my) < lid2 - 0.001) return 0
+
+    // Hinge side: remove the entire back half of the lip (my > 0) so the lid
+    // can rotate open without the lip colliding with the box's inner back wall.
+    if (includeHinge && my > 0) return 0
 
     // Lip wall region — check notches
     for (const xn of xNotches) {
@@ -495,7 +504,8 @@ function generateFlatLid(params: BoxParams) {
 
 // CSG-based lid — only used when text is present (text requires subtract/union)
 function generateLidCSG(params: BoxParams, textGeometry: any) {
-  const { width, depth, wallThickness, lidHeight, lidTolerance, divisionsX, divisionsZ, lidTextStyle, chamferSize } = params
+  const { width, depth, height, wallThickness, lidHeight: lidHeightRaw, lidTolerance, divisionsX, divisionsZ, lidTextStyle, chamferSize, includeHinge } = params
+  const lidHeight = Math.min(lidHeightRaw, height - wallThickness)  // lip can't exceed inner box height
 
   const lipOuterWidth = width - wallThickness * 2 - lidTolerance * 2
   const lipOuterDepth = depth - wallThickness * 2 - lidTolerance * 2
@@ -517,6 +527,15 @@ function generateLidCSG(params: BoxParams, textGeometry: any) {
   // 3. Hollow out the lip interior
   const lipHollow = cuboid({ size: [lipInnerWidth, lipInnerDepth, lidHeight + 0.2] })
   lid = subtract(lid, translate([0, 0, lipCenterZ], lipHollow))
+
+  // 3b. Hinge side: remove the entire back half of the lip (positive-Y side) so the
+  //     lid can rotate open without the lip fouling the box's inner back wall.
+  if (includeHinge) {
+    const backHalfDepth = lipOuterDepth / 2 + 0.1
+    const backHalfCenterY = backHalfDepth / 2
+    const backClear = cuboid({ size: [lipOuterWidth + 0.2, backHalfDepth, lidHeight + 0.4] })
+    lid = subtract(lid, translate([0, backHalfCenterY, lipCenterZ], backClear))
+  }
 
   // 4. Cut divider notches from the lip
   const innerWidth = width - wallThickness * 2
@@ -566,6 +585,152 @@ function generateLidCSG(params: BoxParams, textGeometry: any) {
   return translate([0, 0, (lidHeight - wallThickness) / 2], lid)
 }
 
+// ── Hinge generation ──────────────────────────────────────────────────────────
+// Barrel hinge with short mounting arm — matches the reference photo style.
+//
+// Each knuckle = cylindrical barrel (hollow, for the pin) + flat arm below it.
+// Side-profile looks like a "D" or teardrop: arm is the straight part, barrel
+// is the circle at the outer tip.
+//
+// Three interleaved knuckles per hinge position + one pin:
+//   • 2 box-side knuckles (flanking)  — part of the box STL
+//   • 1 lid-side knuckle  (middle)    — part of the lid STL
+//   • 1 pin                           — separate STL
+//
+// LOCAL ORIGIN of every knuckle = pin axis centre.
+//
+// Barrel:  cylinder radius R, axis X, spans Z ∈ [-R, +R]  (centred at origin)
+// Arm:     cuboid K × R × armH,  Y ∈ [-R, 0],  Z ∈ [-(R+armH), -R]
+//          (arm hangs below barrel, inner face flush with barrel inner face)
+//
+// Translation targets (armH = wallThickness for both):
+//   box knuckle  → (xC, d2+R, h2+wt+R)   arm Z [h2, h2+wt],   barrel Z [h2+wt, h2+wt+2R]
+//   lid knuckle  → (xC, d2+R, R)          arm Z [-wt, 0],      barrel Z [0, 2R]
+// When lid is seated: lid-local Z=R → box Z=h2+wt+R  ✓  (axes coincide)
+
+const HINGE_GAP  = 0.2   // clearance between adjacent knuckles (mm)
+const HINGE_SEGS = 32    // cylinder facets
+
+/**
+ * X positions for hinges (centred in the box width).
+ *   1 hinge  → centre
+ *   2 hinges → ±30 % of width
+ *   3 hinges → ±25 % and centre
+ */
+function hingeXPositions(count: number, width: number): number[] {
+  if (count === 1) return [0]
+  if (count === 2) return [-width * 0.3, width * 0.3]
+  return [-width / 4, 0, width / 4]
+}
+
+/**
+ * One hinge knuckle: hollow cylindrical barrel + flat mounting arm.
+ * Local origin is at the barrel/pin-axis centre.
+ *
+ *   K     — knuckle width along X
+ *   R     — barrel outer radius
+ *   r     — pin bore radius
+ *   armH  — arm height in Z (= wallThickness, so arm spans one wall thickness)
+ *
+ * Barrel:  Z ∈ [-R, +R],        Y ∈ [-R, +R]
+ * Arm:     Z ∈ [-(R+armH), -R], Y ∈ [-R, 0]   (below barrel, inner half only)
+ */
+function makeKnuckle(K: number, R: number, r: number, armH: number): any {
+  // Barrel shifted DOWN by R/2 so it overlaps the arm's top portion.
+  // This fuses barrel and arm into one solid at the junction — no zero-thickness
+  // seam — which prints much more reliably.
+  // Barrel centre at local Z = -R/2  →  Z ∈ [-(R/2+R), R-R/2] = [-3R/2, R/2]
+  const dz    = -R / 2
+  const outer = translate([0, 0, dz], rotate([0, Math.PI / 2, 0],
+    cylinder({ radius: R, height: K,     segments: HINGE_SEGS })))
+  const bore  = translate([0, 0, dz], rotate([0, Math.PI / 2, 0],
+    cylinder({ radius: r, height: K + 2, segments: HINGE_SEGS })))
+  const barrel = subtract(outer, bore)
+
+  // Arm — Y ∈ [-R, 0], Z ∈ [-(R+armH), -R]
+  const arm = translate([0, -R / 2, -(R + armH / 2)],
+    cuboid({ size: [K, R, armH] }))
+
+  return union(barrel, arm)
+}
+
+/**
+ * All box-side hinge knuckles as one JSCAD geometry.
+ * Two flanking knuckles per hinge position.
+ * Arm sits on the box top face; barrel rises above it — both fully outside the box.
+ */
+export function generateBoxHingeKnuckles(params: BoxParams): any {
+  const { width, depth, height, wallThickness: wt, hingeCount, hingeDiameter, hingePinDiameter } = params
+  const d2 = depth / 2, h2 = height / 2
+  const R  = hingeDiameter / 2
+  const r  = hingePinDiameter / 2
+  const K  = hingeDiameter
+
+  // armH = wt+10 → arm spans box Z [h2-10, h2+wt]: 10 mm down the outer back
+  // wall + wt above the box top. The extra 10 mm gives a solid glue surface so
+  // the knuckle won't detach after printing.
+  const knuckle = makeKnuckle(K, R, r, wt + 10)
+
+  let geom: any = null
+  for (const xC of hingeXPositions(hingeCount, width)) {
+    const xL = xC - K - HINGE_GAP
+    const xR = xC + K + HINGE_GAP
+    // Translate so local origin (barrel centre) lands at world Z = h2+wt+R.
+    // With dz=-R/2 inside makeKnuckle, actual barrel centre = h2+wt+R - R/2 = h2+wt+R/2.
+    // Lid: translated to lid-local Z=R → world Z=(h2+wt)+R-R/2 = h2+wt+R/2 ✓ (axes align)
+    const kL = translate([xL, d2 + R, h2 + wt + R], knuckle)
+    const kR = translate([xR, d2 + R, h2 + wt + R], knuckle)
+    geom = geom ? union(geom, union(kL, kR)) : union(kL, kR)
+  }
+  return geom
+}
+
+/**
+ * All lid-side hinge knuckles as one JSCAD geometry.
+ * One middle knuckle per hinge position.
+ * Lid coords: cap top = Z 0, cap bottom = Z -wallThickness.
+ * Arm spans lid Z [-wt, 0] (cap thickness); barrel spans [0, 2R] above cap top.
+ * When seated: lid-local Z=R → box Z=h2+wt+R (matches box pin axis ✓).
+ */
+export function generateLidHingeKnuckles(params: BoxParams): any {
+  const { width, depth, wallThickness: wt, hingeCount, hingeDiameter, hingePinDiameter } = params
+  const d2 = depth / 2
+  const R  = hingeDiameter / 2
+  const r  = hingePinDiameter / 2
+  const K  = hingeDiameter
+
+  const knuckle = makeKnuckle(K, R, r, wt)
+
+  let geom: any = null
+  for (const xC of hingeXPositions(hingeCount, width)) {
+    // Pivot at lid-local (xC, d2+R, R) — same world position as box pivot when assembled
+    const k = translate([xC, d2 + R, R], knuckle)
+    geom = geom ? union(geom, k) : k
+  }
+  return geom
+}
+
+/**
+ * Hinge pins — one per hinge position, printed lying flat at Y=0, Z=0.
+ * Radius = hingePinDiameter/2 − 0.15 mm (press-fit clearance).
+ * Length spans all three knuckles (2 box + 1 lid) plus 2 mm overhang each end.
+ */
+export function generateHingePins(params: BoxParams): any {
+  const { width, hingeCount, hingeDiameter, hingePinDiameter } = params
+  const K         = hingeDiameter
+  const pinRadius = hingePinDiameter / 2 - 0.15
+  const pinLength = 3 * K + 2 * HINGE_GAP + 4
+
+  let geom: any = null
+  for (const xC of hingeXPositions(hingeCount, width)) {
+    const pin = rotate([0, Math.PI / 2, 0],
+      cylinder({ radius: pinRadius, height: pinLength, segments: HINGE_SEGS }))
+    geom = geom ? union(geom, translate([xC, 0, 0], pin)) : translate([xC, 0, 0], pin)
+  }
+  return geom
+}
+
+// ── Three.js conversion ───────────────────────────────────────────────────────
 // Convert JSCAD geometry to Three.js BufferGeometry (for display)
 export function jscadToThreeGeometry(jscadGeom: any): THREE.BufferGeometry {
   const geometry = new THREE.BufferGeometry()
