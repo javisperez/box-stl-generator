@@ -8,18 +8,14 @@ interface BoxViewerProps {
   hingeBoxGeometry: THREE.BufferGeometry | null
   hingeLidGeometry: THREE.BufferGeometry | null
   boxHeight: number
-  boxWidth: number
-  wallThickness: number
+  // Placement of the lid/sleeve mesh, computed by App (differs per lid style)
+  lidOffsetX: number
+  lidOffsetZ: number
 }
 
-export function BoxViewer({ geometry, lidGeometry, hingeBoxGeometry, hingeLidGeometry, boxHeight, boxWidth, wallThickness }: BoxViewerProps) {
+export function BoxViewer({ geometry, lidGeometry, hingeBoxGeometry, hingeLidGeometry, boxHeight, lidOffsetX, lidOffsetZ }: BoxViewerProps) {
   // Inside the group, Z is up (JSCAD convention). The group rotation converts Z-up → Y-up.
   // Box is centered at origin, so offset Z by height/2 to put the bottom on Z=0.
-  // Lid: cap at center, lip hangs below. Bottom of lip at -(wallThickness/2 + lidHeight).
-  // Offset lid Z so the lip bottom sits on Z=0.
-  const lidOffsetZ = wallThickness
-  const lidOffsetX = boxWidth + 10
-
   const mat = (
     <meshStandardMaterial color="#fff" side={THREE.DoubleSide} roughness={0.3} metalness={0.1} />
   )
