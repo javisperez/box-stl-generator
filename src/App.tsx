@@ -2,50 +2,21 @@ import { useState, useEffect } from 'react'
 import { BoxViewer } from './components/BoxViewer'
 import { ControlPanel } from './components/ControlPanel'
 import {
-  generateBox, generateLid, jscadToThreeGeometry, BoxParams,
+  generateBox, generateLid, generateSleeve, sleeveOuterDims, jscadToThreeGeometry, BoxParams,
   generateBoxHingeKnuckles, generateLidHingeKnuckles, generateHingePins,
 } from './utils/boxGenerator'
 import { textToJscadGeometry } from './utils/textGenerator'
 import { exportJscadToSTL, exportMultipleJscadToSTL } from './utils/stlExporter'
+import {
+  DEFAULTS, SavedProject, loadCurrentParams, saveCurrentParams, clearCurrentParams,
+  loadProjects, persistProjects, upsertProject, exportProjectFile, parseProjectFile,
+} from './utils/projectStorage'
 import { Github } from 'lucide-react'
 import * as THREE from 'three'
 
-const STORAGE_KEY = '3d-box-generator-project'
-
-const DEFAULTS: BoxParams = {
-  width: 80,
-  depth: 60,
-  height: 40,
-  wallThickness: 2,
-  includeLid: false,
-  lidHeight: 5,
-  lidTolerance: 0.3,
-  divisionsX: [],
-  divisionsZ: [],
-  lidText: '',
-  lidTextDepth: 0.8,
-  lidTextSize: 16,
-  lidTextStyle: 'engraved' as const,
-  chamferSize: 0,
-  includeHinge: false,
-  hingeCount: 1,
-  hingeDiameter: 8,
-  hingePinDiameter: 2.5,
-}
-
-function loadSavedParams(): BoxParams {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY)
-    if (saved) {
-      const parsed = JSON.parse(saved)
-      return { ...DEFAULTS, ...parsed }
-    }
-  } catch {}
-  return DEFAULTS
-}
-
 function App() {
-  const [params, setParams] = useState<BoxParams>(loadSavedParams)
+  const [params, setParams] = useState<BoxParams>(loadCurrentParams)
+  const [savedProjects, setSavedProjects] = useState<SavedProject[]>(loadProjects)
 
   const [geometry, setGeometry] = useState<THREE.BufferGeometry | null>(null)
   const [lidGeometry, setLidGeometry] = useState<THREE.BufferGeometry | null>(null)
@@ -57,13 +28,27 @@ function App() {
   const [hingeLidJscad, setHingeLidJscad] = useState<any>(null)
   const [hingePinJscad, setHingePinJscad] = useState<any>(null)
 
+  // Autosave the working state so it survives reloads
+  useEffect(() => {
+    saveCurrentParams(params)
+  }, [params])
+
   useEffect(() => {
     try {
       const jscadGeom = generateBox(params)
       setBoxJscad(jscadGeom)
       setGeometry(jscadToThreeGeometry(jscadGeom))
 
-      if (params.includeLid) {
+      if (params.includeLid && params.lidStyle === 'sleeve') {
+        const sleeveJscad = generateSleeve(params)
+        setLidJscad(sleeveJscad)
+        setLidGeometry(jscadToThreeGeometry(sleeveJscad))
+        setHingeBoxJscad(null)
+        setHingeLidJscad(null)
+        setHingePinJscad(null)
+        setHingeBoxGeometry(null)
+        setHingeLidGeometry(null)
+      } else if (params.includeLid) {
         const textGeom = params.lidText.trim()
           ? textToJscadGeometry(params.lidText, params.width, params.depth, params.lidTextSize, params.lidTextDepth)
           : undefined
@@ -113,7 +98,8 @@ function App() {
 
   const handleExportLid = () => {
     if (!lidJscad) return
-    const filename = `lid_${params.width}x${params.depth}x${params.height}.stl`
+    const prefix = params.lidStyle === 'sleeve' ? 'sleeve' : 'lid'
+    const filename = `${prefix}_${params.width}x${params.depth}x${params.height}.stl`
     if (hingeLidJscad) {
       exportMultipleJscadToSTL([lidJscad, hingeLidJscad], filename)
     } else {
@@ -128,14 +114,47 @@ function App() {
     }
   }
 
-  const handleSave = () => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(params))
-  }
-
   const handleReset = () => {
-    localStorage.removeItem(STORAGE_KEY)
+    clearCurrentParams()
     setParams(DEFAULTS)
   }
+
+  const handleSaveProject = (name: string) => {
+    const next = upsertProject(savedProjects, name, params)
+    setSavedProjects(next)
+    persistProjects(next)
+  }
+
+  const handleLoadProject = (name: string) => {
+    const project = savedProjects.find(p => p.name === name)
+    if (project) setParams({ ...project.params })
+  }
+
+  const handleDeleteProject = (name: string) => {
+    if (!confirm(`Delete project "${name}"?`)) return
+    const next = savedProjects.filter(p => p.name !== name)
+    setSavedProjects(next)
+    persistProjects(next)
+  }
+
+  const handleExportJson = (name: string) => {
+    exportProjectFile(name, params)
+  }
+
+  const handleImportJson = async (file: File) => {
+    try {
+      const { params: imported } = parseProjectFile(await file.text())
+      setParams(imported)
+    } catch {
+      alert('Could not import this file — it does not look like a valid project JSON.')
+    }
+  }
+
+  // Where to place the lid/sleeve mesh in the viewer (next to the box, resting on the grid)
+  const sleeve = sleeveOuterDims(params)
+  const isSleeve = params.includeLid && params.lidStyle === 'sleeve'
+  const lidOffsetX = isSleeve ? params.width / 2 + sleeve.w / 2 + 10 : params.width + 10
+  const lidOffsetZ = isSleeve ? sleeve.h / 2 : params.wallThickness
 
   return (
     <div className="min-h-screen bg-background p-4">
@@ -166,8 +185,8 @@ function App() {
               hingeBoxGeometry={hingeBoxGeometry}
               hingeLidGeometry={hingeLidGeometry}
               boxHeight={params.height}
-              boxWidth={params.width}
-              wallThickness={params.wallThickness}
+              lidOffsetX={lidOffsetX}
+              lidOffsetZ={lidOffsetZ}
             />
           </div>
 
@@ -178,8 +197,13 @@ function App() {
               onExport={handleExport}
               onExportLid={handleExportLid}
               onExportPin={handleExportPin}
-              onSave={handleSave}
               onReset={handleReset}
+              savedProjects={savedProjects}
+              onSaveProject={handleSaveProject}
+              onLoadProject={handleLoadProject}
+              onDeleteProject={handleDeleteProject}
+              onExportJson={handleExportJson}
+              onImportJson={handleImportJson}
             />
           </div>
         </div>

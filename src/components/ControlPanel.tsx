@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Label } from './ui/label'
 import { Slider } from './ui/slider'
 import { Button } from './ui/button'
-import { Download, Save, RotateCcw, ChevronDown } from 'lucide-react'
-import { BoxParams } from '@/utils/boxGenerator'
+import { Download, Save, RotateCcw, ChevronDown, Trash2, FileDown, FileUp } from 'lucide-react'
+import { BoxParams, sleeveOuterDims } from '@/utils/boxGenerator'
+import { SavedProject } from '@/utils/projectStorage'
 
 interface ControlPanelProps {
   params: BoxParams
@@ -11,11 +12,16 @@ interface ControlPanelProps {
   onExport: () => void
   onExportLid: () => void
   onExportPin: () => void
-  onSave: () => void
   onReset: () => void
+  savedProjects: SavedProject[]
+  onSaveProject: (name: string) => void
+  onLoadProject: (name: string) => void
+  onDeleteProject: (name: string) => void
+  onExportJson: (name: string) => void
+  onImportJson: (file: File) => void
 }
 
-type TabType = 'generator' | 'box' | 'lid' | 'export'
+type TabType = 'generator' | 'box' | 'lid' | 'export' | 'projects'
 
 const PRINTER_PRESETS: { label: string; bedX: number; bedY: number }[] = [
   { label: 'Custom', bedX: 0, bedY: 0 },
@@ -35,8 +41,13 @@ function evenPositions(count: number): number[] {
   return Array.from({ length: count }, (_, i) => Math.round((i + 1) * 100 / (count + 1)))
 }
 
-export function ControlPanel({ params, onParamsChange, onExport, onExportLid, onExportPin, onSave, onReset }: ControlPanelProps) {
+export function ControlPanel({
+  params, onParamsChange, onExport, onExportLid, onExportPin, onReset,
+  savedProjects, onSaveProject, onLoadProject, onDeleteProject, onExportJson, onImportJson,
+}: ControlPanelProps) {
   const [activeTab, setActiveTab] = useState<TabType>('generator')
+  const [projectName, setProjectName] = useState('')
+  const importInputRef = useRef<HTMLInputElement>(null)
   const [volume, setVolume] = useState(1000) // cubic mm
   const [printerBedX, setPrinterBedX] = useState(220) // mm
   const [printerBedY, setPrinterBedY] = useState(220) // mm
@@ -55,7 +66,12 @@ export function ControlPanel({ params, onParamsChange, onExport, onExportLid, on
   const [divisionSizes, setDivisionSizes] = useState('51, 45, 29') // mm
   const [divisionWallThickness, setDivisionWallThickness] = useState(2) // mm
   const updateParam = (key: keyof BoxParams, value: number | boolean | string) => {
-    onParamsChange({ ...params, [key]: value })
+    const next = { ...params, [key]: value }
+    // Divider walls can never be thicker than the outer walls
+    if (key === 'wallThickness') {
+      next.divisionThickness = Math.min(next.divisionThickness, value as number)
+    }
+    onParamsChange(next)
   }
 
   const setDivisionCount = (axis: 'divisionsX' | 'divisionsZ', count: number) => {
@@ -145,6 +161,7 @@ export function ControlPanel({ params, onParamsChange, onExport, onExportLid, on
         ...params,
         depth: Math.round(totalDepth),
         wallThickness: divisionWallThickness,
+        divisionThickness: divisionWallThickness,
         divisionsX: [], // Clear X divisions
         divisionsZ: divisionPositions,
       }
@@ -161,46 +178,25 @@ export function ControlPanel({ params, onParamsChange, onExport, onExportLid, on
 
       {/* Tabs */}
       <div className="flex border-b">
-        <button
-          className={`px-4 py-2 font-medium transition-colors ${
-            activeTab === 'generator'
-              ? 'border-b-2 border-primary text-foreground'
-              : 'text-muted-foreground hover:text-foreground'
-          }`}
-          onClick={() => setActiveTab('generator')}
-        >
-          Generator
-        </button>
-        <button
-          className={`px-4 py-2 font-medium transition-colors ${
-            activeTab === 'box'
-              ? 'border-b-2 border-primary text-foreground'
-              : 'text-muted-foreground hover:text-foreground'
-          }`}
-          onClick={() => setActiveTab('box')}
-        >
-          Box
-        </button>
-        <button
-          className={`px-4 py-2 font-medium transition-colors ${
-            activeTab === 'lid'
-              ? 'border-b-2 border-primary text-foreground'
-              : 'text-muted-foreground hover:text-foreground'
-          }`}
-          onClick={() => setActiveTab('lid')}
-        >
-          Lid
-        </button>
-        <button
-          className={`px-4 py-2 font-medium transition-colors ${
-            activeTab === 'export'
-              ? 'border-b-2 border-primary text-foreground'
-              : 'text-muted-foreground hover:text-foreground'
-          }`}
-          onClick={() => setActiveTab('export')}
-        >
-          Export
-        </button>
+        {([
+          ['generator', 'Generator'],
+          ['box', 'Box'],
+          ['lid', 'Lid'],
+          ['export', 'Export'],
+          ['projects', 'Projects'],
+        ] as [TabType, string][]).map(([tab, label]) => (
+          <button
+            key={tab}
+            className={`px-3 py-2 font-medium transition-colors ${
+              activeTab === tab
+                ? 'border-b-2 border-primary text-foreground'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+            onClick={() => setActiveTab(tab)}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
       {/* Tab Content */}
@@ -530,6 +526,23 @@ export function ControlPanel({ params, onParamsChange, onExport, onExportLid, on
 
             <div className="space-y-2">
               <div className="flex justify-between items-center">
+                <Label>Divider Thickness (mm)</Label>
+                <span className="text-sm text-muted-foreground">{params.divisionThickness}</span>
+              </div>
+              <Slider
+                min={0.4}
+                max={params.wallThickness}
+                step={0.2}
+                value={params.divisionThickness}
+                onValueChange={(value) => updateParam('divisionThickness', value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Thickness of the internal divider walls. Capped at the outer wall thickness ({params.wallThickness} mm) so dividers are never thicker than the box itself.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex justify-between items-center">
                 <Label>Chamfer (mm)</Label>
                 <span className="text-sm text-muted-foreground">{params.chamferSize}</span>
               </div>
@@ -611,11 +624,69 @@ export function ControlPanel({ params, onParamsChange, onExport, onExportLid, on
                 onChange={(e) => updateParam('includeLid', e.target.checked)}
                 className="h-4 w-4 rounded border-gray-300"
               />
-              <span className="text-sm">Generate lid</span>
+              <span className="text-sm">Generate lid / sleeve</span>
             </label>
 
             {params.includeLid && (
               <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label>Style</Label>
+                  <div className="flex gap-2">
+                    <button
+                      className={`flex-1 px-3 py-1.5 text-sm rounded-md border ${params.lidStyle === 'lid' ? 'bg-primary text-primary-foreground' : 'bg-background'}`}
+                      onClick={() => updateParam('lidStyle', 'lid')}
+                    >
+                      Lid
+                    </button>
+                    <button
+                      className={`flex-1 px-3 py-1.5 text-sm rounded-md border ${params.lidStyle === 'sleeve' ? 'bg-primary text-primary-foreground' : 'bg-background'}`}
+                      onClick={() => updateParam('lidStyle', 'sleeve')}
+                    >
+                      Drawer Sleeve
+                    </button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {params.lidStyle === 'sleeve'
+                      ? 'An open-front cover the box slides in and out of, like a matchbox drawer.'
+                      : 'A cap with an inner lip that sits on top of the box.'}
+                  </p>
+                </div>
+
+                {params.lidStyle === 'sleeve' && (
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-center">
+                        <Label>Fit Tolerance (mm)</Label>
+                        <span className="text-sm text-muted-foreground">{params.sleeveTolerance}</span>
+                      </div>
+                      <Slider
+                        min={0.1}
+                        max={1}
+                        step={0.05}
+                        value={params.sleeveTolerance}
+                        onValueChange={(value) => updateParam('sleeveTolerance', value)}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Gap between the box and the sleeve interior — lower means a tighter fit. Increase it if the box is hard to slide.
+                      </p>
+                    </div>
+
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={params.sleeveCutout}
+                        onChange={(e) => updateParam('sleeveCutout', e.target.checked)}
+                        className="h-4 w-4 rounded border-gray-300"
+                      />
+                      <span className="text-sm">Finger cutout at the opening</span>
+                    </label>
+                    <p className="text-xs text-muted-foreground">
+                      Adds semicircular notches to the top and bottom walls at the opening so you can pinch the box to slide it out — helpful for heavy contents. Print the sleeve standing on its closed back for a clean opening.
+                    </p>
+                  </div>
+                )}
+
+                {params.lidStyle === 'lid' && (<>
                 <div className="space-y-2">
                   <div className="flex justify-between items-center">
                     <Label>Lip Height (mm)</Label>
@@ -642,6 +713,9 @@ export function ControlPanel({ params, onParamsChange, onExport, onExportLid, on
                     value={params.lidTolerance}
                     onValueChange={(value) => updateParam('lidTolerance', value)}
                   />
+                  <p className="text-xs text-muted-foreground">
+                    Gap between the lid's lip and the box walls — lower means a tighter fit. Increase it if the lid is hard to put on or take off.
+                  </p>
                 </div>
 
                 <div className="pt-3 border-t space-y-4">
@@ -768,6 +842,7 @@ export function ControlPanel({ params, onParamsChange, onExport, onExportLid, on
                     </div>
                   </div>
                 </div>
+                </>)}
               </div>
             )}
           </div>
@@ -787,6 +862,12 @@ export function ControlPanel({ params, onParamsChange, onExport, onExportLid, on
                 <span>{params.wallThickness} mm</span>
                 <span className="text-muted-foreground">Dividers</span>
                 <span>{params.divisionsX.length} x {params.divisionsZ.length} z</span>
+                {(params.divisionsX.length > 0 || params.divisionsZ.length > 0) && (
+                  <>
+                    <span className="text-muted-foreground">Divider wall</span>
+                    <span>{params.divisionThickness} mm</span>
+                  </>
+                )}
               </div>
               <Button className="w-full mt-3" size="lg" onClick={onExport}>
                 <Download className="mr-2 h-4 w-4" />
@@ -794,10 +875,29 @@ export function ControlPanel({ params, onParamsChange, onExport, onExportLid, on
               </Button>
             </div>
 
-            {/* Lid Summary */}
+            {/* Lid / Sleeve Summary */}
             <div className={`border rounded-lg p-4 space-y-2 ${!params.includeLid ? 'opacity-50' : ''}`}>
-              <h3 className="text-lg font-semibold">Lid</h3>
+              <h3 className="text-lg font-semibold">{params.lidStyle === 'sleeve' ? 'Drawer Sleeve' : 'Lid'}</h3>
               {params.includeLid ? (
+                params.lidStyle === 'sleeve' ? (() => {
+                  const s = sleeveOuterDims(params)
+                  return (
+                    <>
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                        <span className="text-muted-foreground">Outer</span>
+                        <span>{+s.w.toFixed(1)} x {+s.d.toFixed(1)} x {+s.h.toFixed(1)} mm</span>
+                        <span className="text-muted-foreground">Fit tolerance</span>
+                        <span>{params.sleeveTolerance} mm</span>
+                        <span className="text-muted-foreground">Finger cutout</span>
+                        <span>{params.sleeveCutout ? 'Yes' : 'No'}</span>
+                      </div>
+                      <Button className="w-full mt-3" size="lg" variant="outline" onClick={onExportLid}>
+                        <Download className="mr-2 h-4 w-4" />
+                        Export Sleeve STL
+                      </Button>
+                    </>
+                  )
+                })() : (
                 <>
                   <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
                     <span className="text-muted-foreground">Cap</span>
@@ -824,23 +924,122 @@ export function ControlPanel({ params, onParamsChange, onExport, onExportLid, on
                     </Button>
                   )}
                 </>
+                )
               ) : (
                 <p className="text-sm text-muted-foreground">Lid not enabled. Enable it in the Lid tab.</p>
               )}
             </div>
           </div>
         )}
+
+        {activeTab === 'projects' && (
+          <div className="space-y-6">
+            {/* Save named project */}
+            <div className="space-y-2">
+              <Label>Project Name</Label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={projectName}
+                  onChange={(e) => setProjectName(e.target.value)}
+                  placeholder="My parts organizer"
+                  className="flex-1 min-w-0 px-3 py-2 text-sm rounded-md border bg-background"
+                />
+                <Button
+                  onClick={() => onSaveProject(projectName.trim())}
+                  disabled={!projectName.trim()}
+                >
+                  <Save className="mr-2 h-4 w-4" />
+                  Save
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Saves the current settings under this name. Saving with an existing name overwrites that project.
+              </p>
+            </div>
+
+            {/* Saved projects list */}
+            <div className="space-y-2">
+              <Label>Saved Projects</Label>
+              {savedProjects.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No saved projects yet.</p>
+              ) : (
+                <div className="space-y-2">
+                  {savedProjects.map((p) => (
+                    <div key={p.name} className="flex items-center gap-2 border rounded-md p-2">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{p.name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {p.params.width} x {p.params.depth} x {p.params.height} mm
+                          {' · '}{new Date(p.savedAt).toLocaleDateString()}
+                        </p>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => { onLoadProject(p.name); setProjectName(p.name) }}
+                      >
+                        Load
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        title="Delete project"
+                        onClick={() => onDeleteProject(p.name)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Share via JSON file */}
+            <div className="pt-3 border-t space-y-2">
+              <Label>Share</Label>
+              <p className="text-xs text-muted-foreground">
+                Export the current settings as a JSON file that anyone can import to recreate this exact project.
+              </p>
+              <div className="flex gap-2">
+                <Button
+                  className="flex-1"
+                  variant="outline"
+                  onClick={() => onExportJson(projectName.trim() || 'box-project')}
+                >
+                  <FileDown className="mr-2 h-4 w-4" />
+                  Export JSON
+                </Button>
+                <Button
+                  className="flex-1"
+                  variant="outline"
+                  onClick={() => importInputRef.current?.click()}
+                >
+                  <FileUp className="mr-2 h-4 w-4" />
+                  Import JSON
+                </Button>
+                <input
+                  ref={importInputRef}
+                  type="file"
+                  accept=".json,application/json"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    if (file) onImportJson(file)
+                    e.target.value = ''
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Save / Reset */}
+      {/* Reset */}
       <div className="flex gap-2 pt-4 border-t">
-        <Button className="flex-1" variant="outline" onClick={onSave}>
-          <Save className="mr-2 h-4 w-4" />
-          Save Project
-        </Button>
         <Button className="flex-1" variant="ghost" onClick={onReset}>
           <RotateCcw className="mr-2 h-4 w-4" />
-          Reset
+          Reset to Defaults
         </Button>
       </div>
 

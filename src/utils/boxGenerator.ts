@@ -16,6 +16,7 @@ export interface BoxParams {
   lidTolerance: number   // gap between lid lip and box inner wall for printer fit
   divisionsX: number[]   // divider positions as percentages (1-99) along inner width
   divisionsZ: number[]   // divider positions as percentages (1-99) along inner depth
+  divisionThickness: number // divider wall thickness in mm (clamped to [0.4, wallThickness])
   lidText: string
   lidTextDepth: number
   lidTextSize: number
@@ -25,13 +26,23 @@ export interface BoxParams {
   hingeCount: number         // number of hinges along the back edge (1–3)
   hingeDiameter: number      // outer barrel diameter in mm
   hingePinDiameter: number   // pin hole diameter in mm
+  lidStyle: 'lid' | 'sleeve' // 'lid' = cap with lip; 'sleeve' = open-front cover the box slides into
+  sleeveTolerance: number    // gap between box and sleeve interior for sliding fit
+  sleeveCutout: boolean      // finger notches at the sleeve opening to grab the box
+}
+
+// Divider walls must stay printable and can never exceed the outer wall thickness
+export function clampDivisionThickness(divisionThickness: number, wallThickness: number): number {
+  const dt = Number.isFinite(divisionThickness) ? divisionThickness : wallThickness
+  return Math.min(Math.max(dt, 0.4), wallThickness)
 }
 
 // Direct geometry construction — no CSG, guaranteed manifold
 export function generateBox(params: BoxParams) {
-  const { width, depth, height, wallThickness, divisionsX, divisionsZ, chamferSize } = params
+  const { width, depth, height, wallThickness, divisionsX, divisionsZ, divisionThickness, chamferSize } = params
   const w2 = width / 2, d2 = depth / 2, h2 = height / 2
   const wt = wallThickness
+  const dt = clampDivisionThickness(divisionThickness, wt)
   const c = Math.min(chamferSize, wt, width / 4, depth / 4) // clamped chamfer
   const iw = width - 2 * wt, id = depth - 2 * wt
   const iw2 = iw / 2, id2 = id / 2
@@ -43,10 +54,10 @@ export function generateBox(params: BoxParams) {
 
   // Breakpoints: inner area split at divider edges
   const xIn: number[] = [-iw2]
-  for (const x of xDivs) { xIn.push(x - wt / 2, x + wt / 2) }
+  for (const x of xDivs) { xIn.push(x - dt / 2, x + dt / 2) }
   xIn.push(iw2)
   const yIn: number[] = [-id2]
-  for (const y of yDivs) { yIn.push(y - wt / 2, y + wt / 2) }
+  for (const y of yDivs) { yIn.push(y - dt / 2, y + dt / 2) }
   yIn.push(id2)
 
   // Full breakpoints (outer + inner)
@@ -62,9 +73,9 @@ export function generateBox(params: BoxParams) {
 
   // Check if a cell midpoint falls inside a divider
   const isXDiv = (a: number, b: number) =>
-    xDivs.some(x => Math.abs((a + b) / 2 - x) < wt / 2 - 0.001)
+    xDivs.some(x => Math.abs((a + b) / 2 - x) < dt / 2 - 0.001)
   const isYDiv = (a: number, b: number) =>
-    yDivs.some(y => Math.abs((a + b) / 2 - y) < wt / 2 - 0.001)
+    yDivs.some(y => Math.abs((a + b) / 2 - y) < dt / 2 - 0.001)
 
   // Helper: emit grid of quads on a plane
   // makeVerts returns 4 vertices in CCW order (outward normal via right-hand rule)
@@ -214,7 +225,7 @@ export function generateBox(params: BoxParams) {
 
   // === X-DIVIDER WALL FACES ===
   for (const xd of xDivs) {
-    const xl = xd - wt / 2, xr = xd + wt / 2
+    const xl = xd - dt / 2, xr = xd + dt / 2
     // Left face (N = -X)
     grid(yIn, [fl, h2],
       (y0, y1, z0, z1) => [[xl,y1,z0],[xl,y0,z0],[xl,y0,z1],[xl,y1,z1]],
@@ -227,7 +238,7 @@ export function generateBox(params: BoxParams) {
 
   // === Y-DIVIDER WALL FACES ===
   for (const yd of yDivs) {
-    const yf = yd - wt / 2, yb = yd + wt / 2
+    const yf = yd - dt / 2, yb = yd + dt / 2
     // Front face (N = -Y)
     grid(xIn, [fl, h2],
       (x0, x1, z0, z1) => [[x0,yf,z0],[x1,yf,z0],[x1,yf,z1],[x0,yf,z1]],
@@ -253,8 +264,9 @@ export function generateLid(params: BoxParams, textGeometry?: any) {
 // Uses a heightmap grid: cap cells have top=0, lip wall cells have top=lidHeight.
 // Vertical step faces are generated automatically where heights differ.
 function generateFlatLid(params: BoxParams) {
-  const { width, depth, height, wallThickness: wt, lidHeight: lhRaw, lidTolerance: tol, divisionsX, divisionsZ, chamferSize, includeHinge } = params
+  const { width, depth, height, wallThickness: wt, lidHeight: lhRaw, lidTolerance: tol, divisionsX, divisionsZ, divisionThickness, chamferSize, includeHinge } = params
   const lh = Math.min(lhRaw, height - wt)  // lip can't exceed inner box height
+  const dt = clampDivisionThickness(divisionThickness, wt)
 
   const w2 = width / 2, d2 = depth / 2
   const c = Math.min(chamferSize, wt, width / 4, depth / 4) // clamped chamfer
@@ -268,7 +280,7 @@ function generateFlatLid(params: BoxParams) {
   // Divider notch info
   const innerW = width - 2 * wt
   const innerD = depth - 2 * wt
-  const sw = wt + tol * 2          // slot width
+  const sw = dt + tol * 2          // slot width
 
   const xNotches = [...divisionsX].sort((a, b) => a - b)
     .map(p => -innerW / 2 + (p / 100) * innerW)
@@ -504,8 +516,9 @@ function generateFlatLid(params: BoxParams) {
 
 // CSG-based lid — only used when text is present (text requires subtract/union)
 function generateLidCSG(params: BoxParams, textGeometry: any) {
-  const { width, depth, height, wallThickness, lidHeight: lidHeightRaw, lidTolerance, divisionsX, divisionsZ, lidTextStyle, chamferSize, includeHinge } = params
+  const { width, depth, height, wallThickness, lidHeight: lidHeightRaw, lidTolerance, divisionsX, divisionsZ, divisionThickness, lidTextStyle, chamferSize, includeHinge } = params
   const lidHeight = Math.min(lidHeightRaw, height - wallThickness)  // lip can't exceed inner box height
+  const divThickness = clampDivisionThickness(divisionThickness, wallThickness)
 
   const lipOuterWidth = width - wallThickness * 2 - lidTolerance * 2
   const lipOuterDepth = depth - wallThickness * 2 - lidTolerance * 2
@@ -543,13 +556,13 @@ function generateLidCSG(params: BoxParams, textGeometry: any) {
 
   for (const pct of divisionsX) {
     const xPos = -innerWidth / 2 + (pct / 100) * innerWidth
-    const slot = cuboid({ size: [wallThickness + lidTolerance * 2, lipOuterDepth + 0.2, lidHeight + 0.2] })
+    const slot = cuboid({ size: [divThickness + lidTolerance * 2, lipOuterDepth + 0.2, lidHeight + 0.2] })
     lid = subtract(lid, translate([xPos, 0, lipCenterZ], slot))
   }
 
   for (const pct of divisionsZ) {
     const yPos = -innerDepth / 2 + (pct / 100) * innerDepth
-    const slot = cuboid({ size: [lipOuterWidth + 0.2, wallThickness + lidTolerance * 2, lidHeight + 0.2] })
+    const slot = cuboid({ size: [lipOuterWidth + 0.2, divThickness + lidTolerance * 2, lidHeight + 0.2] })
     lid = subtract(lid, translate([0, yPos, lipCenterZ], slot))
   }
 
@@ -583,6 +596,50 @@ function generateLidCSG(params: BoxParams, textGeometry: any) {
   // 7. Translate to match expected coordinate system:
   // Cap bottom at -wallThickness, cap top at 0, lip extends upward to lidHeight
   return translate([0, 0, (lidHeight - wallThickness) / 2], lid)
+}
+
+// ── Drawer sleeve ─────────────────────────────────────────────────────────────
+// An open-front cover the box slides into (matchbox style): 4 walls + closed
+// back for a stop, open at the front (-Y). Centered at the origin like the box.
+//
+//   inner cavity: (width + 2·tol) × (depth + tol) × (height + 2·tol)
+//   outer shell:  inner + wallThickness on every closed side
+//
+// Optional finger cutout: semicircular notches through the top and bottom walls
+// at the opening, so the box can be pinched and pulled out even when heavy.
+
+// Outer dimensions of the sleeve — shared by the generator, viewer and UI summary
+export function sleeveOuterDims(params: BoxParams): { w: number; d: number; h: number } {
+  const { width, depth, height, wallThickness: wt, sleeveTolerance: tol } = params
+  return {
+    w: width + 2 * tol + 2 * wt,
+    d: depth + tol + wt,
+    h: height + 2 * tol + 2 * wt,
+  }
+}
+
+export function generateSleeve(params: BoxParams): any {
+  const { width, depth, wallThickness: wt, sleeveTolerance: tol, sleeveCutout } = params
+  const { w: outerW, d: outerD, h: outerH } = sleeveOuterDims(params)
+  const innerW = outerW - 2 * wt
+  const innerH = outerH - 2 * wt
+  const cavityD = depth + tol // from front opening to inside of back wall
+
+  let sleeve: any = cuboid({ size: [outerW, outerD, outerH] })
+
+  // Cavity, extended 1 mm past the front face so the front is fully open
+  const cavity = cuboid({ size: [innerW, cavityD + 1, innerH] })
+  sleeve = subtract(sleeve, translate([0, -(wt + 1) / 2, 0], cavity))
+
+  if (sleeveCutout) {
+    // Vertical cylinder centered on the front face: leaves matching semicircular
+    // notches in the top and bottom walls (pinch grip, works in any orientation).
+    const notchR = Math.min(width * 0.3, 10)
+    const notch = cylinder({ radius: notchR, height: outerH + 2, segments: 48 })
+    sleeve = subtract(sleeve, translate([0, -outerD / 2, 0], notch))
+  }
+
+  return sleeve
 }
 
 // ── Hinge generation ──────────────────────────────────────────────────────────
