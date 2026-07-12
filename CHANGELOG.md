@@ -4,6 +4,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 with date-based entries since the project has no version releases.
 
+## 2026-07-12
+
+### Changed
+- Rewrote the README to match the current app: pnpm-based setup, the four-tab
+  control panel, sleeve and hinged lid styles, lid patterns, chamfers, printer
+  plate presets, project save/share, and the floating export control with
+  material estimates.
+
+### Fixed
+- Deploy workflow failed on push to main: the workflow pinned Node 20, but
+  pnpm 11 (installed via `version: latest`) requires Node ≥ 22.13, and GitHub
+  is deprecating Node 20 on runners. The workflow now uses Node 24.
+
 ## 2026-07-10
 
 ### Fixed
