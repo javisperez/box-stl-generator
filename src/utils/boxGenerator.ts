@@ -1,10 +1,24 @@
-import { primitives, booleans, transforms, extrusions } from '@jscad/modeling'
+import { primitives, booleans, transforms, extrusions, geometries, measurements } from '@jscad/modeling'
 import * as THREE from 'three'
 
-const { cuboid, polygon, cylinder } = primitives
+const { cuboid, polygon, cylinder, circle, rectangle } = primitives
 const { subtract, union } = booleans
 const { translate, mirrorX, rotate } = transforms
-const { extrudeLinear } = extrusions
+const { extrudeLinear, extrudeRotate } = extrusions
+const { geom3 } = geometries
+const { measureBoundingBox } = measurements
+
+export type LidPattern = 'none' | 'circles' | 'squares' | 'diamonds' | 'hexagons' | 'triangles' | 'slots'
+
+export const LID_PATTERNS: { value: LidPattern; label: string }[] = [
+  { value: 'none', label: 'None' },
+  { value: 'circles', label: 'Circles' },
+  { value: 'squares', label: 'Squares' },
+  { value: 'diamonds', label: 'Diamonds' },
+  { value: 'hexagons', label: 'Hexagons' },
+  { value: 'triangles', label: 'Triangles' },
+  { value: 'slots', label: 'Slots' },
+]
 
 export interface BoxParams {
   width: number
@@ -21,6 +35,10 @@ export interface BoxParams {
   lidTextDepth: number
   lidTextSize: number
   lidTextStyle: 'engraved' | 'embossed'
+  lidTextRotation: number // degrees CCW on the lid/sleeve top: 0 | 90 | 180 | 270
+  lidPattern: LidPattern       // cutout pattern through the lid cap / sleeve walls
+  lidPatternSize: number       // feature size across, in mm
+  lidPatternSpacing: number    // gap between features, in mm
   chamferSize: number        // 45° chamfer on outer vertical edges (0 = none)
   includeHinge: boolean
   hingeCount: number         // number of hinges along the back edge (1–3)
@@ -252,20 +270,175 @@ export function generateBox(params: BoxParams) {
   return { polygons: polys }
 }
 
+// ── Cutout patterns ───────────────────────────────────────────────────────────
+// Grid of holes punched through the lid cap (or the sleeve's top and bottom
+// walls) to save filament. Text always keeps a solid patch: holes that would
+// intersect the text footprint are skipped, so engraved/embossed text sits on
+// solid material.
+
+interface Rect2 { x0: number; x1: number; y0: number; y1: number }
+
+// 2D shape for one hole, centered at the origin. `size` is the across dimension.
+function patternShape2D(pattern: LidPattern, size: number): any | null {
+  const r = size / 2
+  switch (pattern) {
+    case 'circles': return circle({ radius: r, segments: 20 })
+    case 'squares': return rectangle({ size: [size, size] })
+    case 'diamonds': return polygon({ points: [[r, 0], [0, r], [-r, 0], [0, -r]] })
+    case 'hexagons': return circle({ radius: r, segments: 6 })
+    case 'triangles': return polygon({ points: [[0, r], [-r * 0.866, -r / 2], [r * 0.866, -r / 2]] })
+    case 'slots': return rectangle({ size: [size * 2, size * 0.45] })
+    default: return null
+  }
+}
+
+// Half extents of a hole's footprint (grid fitting + exclusion tests)
+function patternHalfExtents(pattern: LidPattern, size: number): [number, number] {
+  return pattern === 'slots' ? [size, size * 0.225] : [size / 2, size / 2]
+}
+
+/**
+ * Build the union of all pattern hole prisms for the given region, spanning
+ * zFrom..zTo. Returns null when the pattern is off or nothing fits.
+ * Rows are staggered by half a pitch (except squares and slots); triangles
+ * alternate point-up/point-down so they tessellate.
+ */
+function patternPrisms(params: BoxParams, region: Rect2, zFrom: number, zTo: number, exclusions: Rect2[]): any | null {
+  const pattern = params.lidPattern
+  if (pattern === 'none') return null
+  const size = Math.max(2, params.lidPatternSize)
+  const spacing = Math.max(1.5, params.lidPatternSpacing)
+
+  const [hx, hy] = patternHalfExtents(pattern, size)
+  let px = hx * 2 + spacing
+  let py = hy * 2 + spacing
+
+  const W = region.x1 - region.x0
+  const D = region.y1 - region.y0
+  if (W < hx * 2 || D < hy * 2) return null
+
+  // Keep the live preview responsive: if the grid would be huge, widen the
+  // pitch until the hole count is reasonable.
+  const MAX_HOLES = 350
+  let nx = Math.floor((W - hx * 2) / px) + 1
+  let ny = Math.floor((D - hy * 2) / py) + 1
+  if (nx * ny > MAX_HOLES) {
+    const scale = Math.sqrt((nx * ny) / MAX_HOLES)
+    px *= scale
+    py *= scale
+    nx = Math.floor((W - hx * 2) / px) + 1
+    ny = Math.floor((D - hy * 2) / py) + 1
+  }
+
+  // Center the grid in the region
+  const gridW = (nx - 1) * px + hx * 2
+  const gridD = (ny - 1) * py + hy * 2
+  const startX = region.x0 + (W - gridW) / 2 + hx
+  const startY = region.y0 + (D - gridD) / 2 + hy
+
+  const shape = patternShape2D(pattern, size)
+  if (!shape) return null
+  const h = zTo - zFrom
+  const prism = extrudeLinear({ height: h }, shape)
+  const prismAlt = pattern === 'triangles'
+    ? extrudeLinear({ height: h }, rotate([0, 0, Math.PI], shape))
+    : prism
+
+  const stagger = pattern !== 'squares' && pattern !== 'slots'
+  const holes: any[] = []
+  for (let row = 0; row < ny; row++) {
+    const y = startY + row * py
+    const odd = row % 2 === 1
+    const offset = stagger && odd ? px / 2 : 0
+    const count = stagger && odd ? nx - 1 : nx
+    for (let col = 0; col < count; col++) {
+      const x = startX + col * px + offset
+      if (exclusions.some((r) => x + hx > r.x0 && x - hx < r.x1 && y + hy > r.y0 && y - hy < r.y1)) continue
+      const p = pattern === 'triangles' && (col + row) % 2 === 1 ? prismAlt : prism
+      holes.push(translate([x, y, zFrom], p))
+    }
+  }
+  if (holes.length === 0) return null
+
+  // Tree-reduce union (holes are disjoint, but jscad still wants one geometry)
+  let current = holes
+  while (current.length > 1) {
+    const next: any[] = []
+    for (let i = 0; i < current.length; i += 2) {
+      next.push(i + 1 < current.length ? union(current[i], current[i + 1]) : current[i])
+    }
+    current = next
+  }
+  return current[0]
+}
+
+// A padded Rect2 around geometry's XY bounding box (for text exclusion zones)
+function boundsRect(geom: any, pad: number, mirrorInX: boolean): Rect2 {
+  const bb = measureBoundingBox(geom)
+  let x0 = bb[0][0] - pad
+  let x1 = bb[1][0] + pad
+  if (mirrorInX) {
+    const t = x0
+    x0 = -x1
+    x1 = -t
+  }
+  return { x0, x1, y0: bb[0][1] - pad, y1: bb[1][1] + pad }
+}
+
+// Direct-built geometry is a plain {polygons} object; booleans need a geom3
+function asGeom3(g: any): any {
+  return g && g.transforms ? g : geom3.create(g.polygons)
+}
+
+// Pattern holes for the lid cap, in the standard lid frame (cap Z ∈ [-wt, 0])
+function lidPatternHoles(params: BoxParams, textGeometry?: any): any | null {
+  const { width, depth, wallThickness: wt, lidTolerance: tol, includeHinge } = params
+  const w2 = width / 2
+  const d2 = depth / 2
+
+  let region: Rect2
+  if (includeHinge) {
+    // Flat slab: keep a solid border all around
+    const inset = wt + 2
+    region = { x0: -w2 + inset, x1: w2 - inset, y0: -d2 + inset, y1: d2 - inset }
+  } else {
+    // Friction lid: stay inside the lip's inner footprint so holes never cut
+    // into the lip walls above the cap
+    const ix = w2 - wt - tol - wt - 1.5
+    const iy = d2 - wt - tol - wt - 1.5
+    region = { x0: -ix, x1: ix, y0: -iy, y1: iy }
+  }
+
+  const exclusions: Rect2[] = []
+  if (textGeometry) {
+    // Friction lid text is mirrored in X (it reads through the flip)
+    exclusions.push(boundsRect(textGeometry, 1.5, !includeHinge))
+  }
+  return patternPrisms(params, region, -wt - 0.5, 0.5, exclusions)
+}
+
 export function generateLid(params: BoxParams, textGeometry?: any) {
   // Text requires CSG operations (subtract/union)
-  if (textGeometry) {
-    return generateLidCSG(params, textGeometry)
+  let lid = textGeometry ? generateLidCSG(params, textGeometry) : generateFlatLid(params)
+  if (params.lidPattern !== 'none') {
+    const holes = lidPatternHoles(params, textGeometry)
+    if (holes) lid = subtract(asGeom3(lid), holes)
   }
-  return generateFlatLid(params)
+  return lid
 }
 
 // Direct geometry construction for flat lids — no CSG, guaranteed manifold.
 // Uses a heightmap grid: cap cells have top=0, lip wall cells have top=lidHeight.
 // Vertical step faces are generated automatically where heights differ.
+//
+// Hinged lids have NO lip (lh = 0 → plain slab): a lip can't coexist with a
+// hinge, because a lid whose barrel aligns with the box knuckles when closed
+// would need lip and barrel on opposite faces — unprintable flat. The hinged
+// lid is instead modeled directly in its closed orientation (z=0 face up),
+// which is also exactly what the knuckle placement assumes.
 function generateFlatLid(params: BoxParams) {
   const { width, depth, height, wallThickness: wt, lidHeight: lhRaw, lidTolerance: tol, divisionsX, divisionsZ, divisionThickness, chamferSize, includeHinge } = params
-  const lh = Math.min(lhRaw, height - wt)  // lip can't exceed inner box height
+  const lh = includeHinge ? 0 : Math.min(lhRaw, height - wt)  // lip can't exceed inner box height
   const dt = clampDivisionThickness(divisionThickness, wt)
 
   const w2 = width / 2, d2 = depth / 2
@@ -282,8 +455,12 @@ function generateFlatLid(params: BoxParams) {
   const innerD = depth - 2 * wt
   const sw = dt + tol * 2          // slot width
 
+  // The lid is used FLIPPED about the Y axis (x → -x; the flip the text
+  // pre-mirroring assumes), so X notches must be cut mirrored to land on the
+  // dividers after the flip. Y positions are unchanged by that flip.
+  // Symmetric layouts hid this; asymmetric X percentages exposed it.
   const xNotches = [...divisionsX].sort((a, b) => a - b)
-    .map(p => -innerW / 2 + (p / 100) * innerW)
+    .map(p => innerW / 2 - (p / 100) * innerW)
   const yNotches = [...divisionsZ].sort((a, b) => a - b)
     .map(p => -innerD / 2 + (p / 100) * innerD)
 
@@ -313,10 +490,6 @@ function generateFlatLid(params: BoxParams) {
     // Inside lip inner → cavity
     if (liw2 > 0.01 && lid2 > 0.01 &&
         Math.abs(mx) < liw2 - 0.001 && Math.abs(my) < lid2 - 0.001) return 0
-
-    // Hinge side: remove the entire back half of the lip (my > 0) so the lid
-    // can rotate open without the lip colliding with the box's inner back wall.
-    if (includeHinge && my > 0) return 0
 
     // Lip wall region — check notches
     for (const xn of xNotches) {
@@ -520,6 +693,37 @@ function generateLidCSG(params: BoxParams, textGeometry: any) {
   const lidHeight = Math.min(lidHeightRaw, height - wallThickness)  // lip can't exceed inner box height
   const divThickness = clampDivisionThickness(divisionThickness, wallThickness)
 
+  // Hinged lids are flat slabs modeled in closed orientation (see generateFlatLid).
+  // Text goes on the TOP face, unmirrored — it's read in place, not through the cap.
+  if (includeHinge) {
+    let slab: any = cuboid({ size: [width, depth, wallThickness] })
+
+    const c = Math.min(chamferSize, wallThickness, width / 4, depth / 4)
+    if (c > 0) {
+      const w2 = width / 2, d2 = depth / 2
+      const cornerTris: [number, number][][] = [
+        [[-w2, -d2], [-w2 + c, -d2], [-w2, -d2 + c]],  // front-left
+        [[ w2, -d2], [ w2, -d2 + c], [ w2 - c, -d2]],  // front-right
+        [[ w2,  d2], [ w2 - c,  d2], [ w2,  d2 - c]],  // back-right
+        [[-w2,  d2], [-w2,  d2 - c], [-w2 + c,  d2]],  // back-left
+      ]
+      for (const points of cornerTris) {
+        const prism = extrudeLinear({ height: wallThickness + 2 }, polygon({ points }))
+        slab = subtract(slab, translate([0, 0, -(wallThickness + 2) / 2], prism))
+      }
+    }
+
+    const capTop = wallThickness / 2
+    if (lidTextStyle === 'engraved') {
+      slab = subtract(slab, translate([0, 0, capTop - params.lidTextDepth], textGeometry))
+    } else {
+      slab = union(slab, translate([0, 0, capTop], textGeometry))
+    }
+
+    // Standard lid frame: bottom at -wallThickness, top at 0
+    return translate([0, 0, -capTop], slab)
+  }
+
   const lipOuterWidth = width - wallThickness * 2 - lidTolerance * 2
   const lipOuterDepth = depth - wallThickness * 2 - lidTolerance * 2
   const lipInnerWidth = lipOuterWidth - wallThickness * 2
@@ -541,21 +745,13 @@ function generateLidCSG(params: BoxParams, textGeometry: any) {
   const lipHollow = cuboid({ size: [lipInnerWidth, lipInnerDepth, lidHeight + 0.2] })
   lid = subtract(lid, translate([0, 0, lipCenterZ], lipHollow))
 
-  // 3b. Hinge side: remove the entire back half of the lip (positive-Y side) so the
-  //     lid can rotate open without the lip fouling the box's inner back wall.
-  if (includeHinge) {
-    const backHalfDepth = lipOuterDepth / 2 + 0.1
-    const backHalfCenterY = backHalfDepth / 2
-    const backClear = cuboid({ size: [lipOuterWidth + 0.2, backHalfDepth, lidHeight + 0.4] })
-    lid = subtract(lid, translate([0, backHalfCenterY, lipCenterZ], backClear))
-  }
-
   // 4. Cut divider notches from the lip
   const innerWidth = width - wallThickness * 2
   const innerDepth = depth - wallThickness * 2
 
   for (const pct of divisionsX) {
-    const xPos = -innerWidth / 2 + (pct / 100) * innerWidth
+    // Mirrored: the lid is used flipped about Y (x → -x), like the text
+    const xPos = innerWidth / 2 - (pct / 100) * innerWidth
     const slot = cuboid({ size: [divThickness + lidTolerance * 2, lipOuterDepth + 0.2, lidHeight + 0.2] })
     lid = subtract(lid, translate([xPos, 0, lipCenterZ], slot))
   }
@@ -618,8 +814,8 @@ export function sleeveOuterDims(params: BoxParams): { w: number; d: number; h: n
   }
 }
 
-export function generateSleeve(params: BoxParams): any {
-  const { width, depth, wallThickness: wt, sleeveTolerance: tol, sleeveCutout } = params
+export function generateSleeve(params: BoxParams, textGeometry?: any): any {
+  const { width, depth, wallThickness: wt, sleeveTolerance: tol, sleeveCutout, lidTextStyle, lidTextDepth } = params
   const { w: outerW, d: outerD, h: outerH } = sleeveOuterDims(params)
   const innerW = outerW - 2 * wt
   const innerH = outerH - 2 * wt
@@ -639,34 +835,76 @@ export function generateSleeve(params: BoxParams): any {
     sleeve = subtract(sleeve, translate([0, -outerD / 2, 0], notch))
   }
 
+  // Text on the top face, read in place — no mirroring needed
+  if (textGeometry) {
+    const top = outerH / 2
+    if (lidTextStyle === 'engraved') {
+      sleeve = subtract(sleeve, translate([0, 0, top - lidTextDepth], textGeometry))
+    } else {
+      sleeve = union(sleeve, translate([0, 0, top], textGeometry))
+    }
+  }
+
+  // Cutout pattern: full-height prisms perforate the top AND bottom walls in
+  // matching positions (the middle is cavity air). Solid margins are kept at
+  // the opening, the back wall, the sides, the finger notch, and the text.
+  if (params.lidPattern !== 'none') {
+    const exclusions: Rect2[] = []
+    if (sleeveCutout) {
+      const notchR = Math.min(width * 0.3, 10)
+      exclusions.push({ x0: -notchR - 1.5, x1: notchR + 1.5, y0: -outerD / 2 - 1, y1: -outerD / 2 + notchR + 1.5 })
+    }
+    if (textGeometry) {
+      exclusions.push(boundsRect(textGeometry, 1.5, false))
+    }
+    const region: Rect2 = {
+      x0: -(innerW / 2 - 1.5),
+      x1: innerW / 2 - 1.5,
+      y0: -outerD / 2 + 4,
+      y1: outerD / 2 - wt - 1.5,
+    }
+    const holes = patternPrisms(params, region, -outerH / 2 - 0.5, outerH / 2 + 0.5, exclusions)
+    if (holes) sleeve = subtract(sleeve, holes)
+  }
+
   return sleeve
 }
 
-// ── Hinge generation ──────────────────────────────────────────────────────────
-// Barrel hinge with short mounting arm — matches the reference photo style.
+// ── Hinge generation (pin-less snap hinge) ────────────────────────────────────
+// Barrel hinge with integrated snap axles — nothing extra to print, no pin.
 //
-// Each knuckle = cylindrical barrel (hollow, for the pin) + flat arm below it.
-// Side-profile looks like a "D" or teardrop: arm is the straight part, barrel
-// is the circle at the outer tip.
+// Three interleaved knuckles per hinge position:
+//   • 2 box-side knuckles (flanking) — C-clips: a through bore with a slot to
+//     the top that is slightly narrower than the axle, so the axle clicks in
+//   • 1 lid-side knuckle (middle) — solid barrel with a tapered axle stub on
+//     each side, all one solid of revolution
 //
-// Three interleaved knuckles per hinge position + one pin:
-//   • 2 box-side knuckles (flanking)  — part of the box STL
-//   • 1 lid-side knuckle  (middle)    — part of the lid STL
-//   • 1 pin                           — separate STL
+// Assembly: press the lid's stubs straight down into the box clips until they
+// click into the bores. Pull the lid straight up (open flat) to remove.
 //
-// LOCAL ORIGIN of every knuckle = pin axis centre.
+// IMPORTANT — no boolean ops in here. JSCAD's union/subtract leave sliver
+// polygons and unpaired edges on the split faces that survive even T-junction
+// repair, and slicers report them as open edges. Every piece (clip, barrel,
+// arm) is built as its own closed manifold — extrusion or revolve — and the
+// pieces are concatenated as separate overlapping shells, which slicers merge.
 //
-// Barrel:  cylinder radius R, axis X, spans Z ∈ [-R, +R]  (centred at origin)
-// Arm:     cuboid K × R × armH,  Y ∈ [-R, 0],  Z ∈ [-(R+armH), -R]
-//          (arm hangs below barrel, inner face flush with barrel inner face)
+// The hinged lid is a flat slab modeled in closed orientation (see
+// generateFlatLid), so the lid knuckle below is also placed in the closed
+// pose: arm spans the slab thickness Z ∈ [-wt, 0], barrel behind the back edge.
 //
-// Translation targets (armH = wallThickness for both):
-//   box knuckle  → (xC, d2+R, h2+wt+R)   arm Z [h2, h2+wt],   barrel Z [h2+wt, h2+wt+2R]
-//   lid knuckle  → (xC, d2+R, R)          arm Z [-wt, 0],      barrel Z [0, 2R]
-// When lid is seated: lid-local Z=R → box Z=h2+wt+R  ✓  (axes coincide)
+// LOCAL ORIGIN of every knuckle = hinge axis centre.
+// Translation targets:
+//   box knuckle  → (xC ± (K+GAP), d2+R, h2+wt+R)   barrel centre Z = h2+wt+R/2
+//   lid knuckle  → (xC, d2+R, R)                    barrel centre Z = R/2
+// When the lid is closed (slab bottom on the rim): lid-local Z=R →
+// box Z = h2+wt+R  ✓  (axes coincide)
 
-const HINGE_GAP  = 0.2   // clearance between adjacent knuckles (mm)
-const HINGE_SEGS = 32    // cylinder facets
+const HINGE_GAP  = 0.2      // side clearance between adjacent knuckles (mm)
+const HINGE_SEGS = 32       // cylinder facets
+const AXLE_CLEARANCE = 0.25 // radial clearance between axle stub and bore (mm)
+const AXLE_ENGAGE = 1.4     // stub length: bridges HINGE_GAP, then seats in the bore
+const AXLE_TAPER = 0.4      // stub tip is this much smaller in radius (lead-in)
+const SNAP_PINCH = 0.6      // channel mouth narrower than the axle Ø by this much (mm)
 
 /**
  * X positions for hinges (centred in the box width).
@@ -681,110 +919,123 @@ function hingeXPositions(count: number, width: number): number[] {
 }
 
 /**
- * One hinge knuckle: hollow cylindrical barrel + flat mounting arm.
- * Local origin is at the barrel/pin-axis centre.
- *
- *   K     — knuckle width along X
- *   R     — barrel outer radius
- *   r     — pin bore radius
- *   armH  — arm height in Z (= wallThickness, so arm spans one wall thickness)
- *
- * Barrel:  Z ∈ [-R, +R],        Y ∈ [-R, +R]
- * Arm:     Z ∈ [-(R+armH), -R], Y ∈ [-R, 0]   (below barrel, inner half only)
+ * Concatenate closed solids into one plain polygon-soup geometry (transforms
+ * baked). Each input stays a closed manifold shell, so the result has no open
+ * edges; overlapping shells are merged by the slicer. The plain {polygons}
+ * shape flows through the viewer and exporter unchanged.
  */
-function makeKnuckle(K: number, R: number, r: number, armH: number): any {
-  // Barrel shifted DOWN by R/2 so it overlaps the arm's top portion.
-  // This fuses barrel and arm into one solid at the junction — no zero-thickness
-  // seam — which prints much more reliably.
-  // Barrel centre at local Z = -R/2  →  Z ∈ [-(R/2+R), R-R/2] = [-3R/2, R/2]
-  const dz    = -R / 2
-  const outer = translate([0, 0, dz], rotate([0, Math.PI / 2, 0],
-    cylinder({ radius: R, height: K,     segments: HINGE_SEGS })))
-  const bore  = translate([0, 0, dz], rotate([0, Math.PI / 2, 0],
-    cylinder({ radius: r, height: K + 2, segments: HINGE_SEGS })))
-  const barrel = subtract(outer, bore)
-
-  // Arm — Y ∈ [-R, 0], Z ∈ [-(R+armH), -R]
-  const arm = translate([0, -R / 2, -(R + armH / 2)],
-    cuboid({ size: [K, R, armH] }))
-
-  return union(barrel, arm)
+function mergeSolids(geoms: any[]): any {
+  return { polygons: geoms.flatMap((g) => geom3.toPolygons(g)) }
 }
 
 /**
- * All box-side hinge knuckles as one JSCAD geometry.
- * Two flanking knuckles per hinge position.
- * Arm sits on the box top face; barrel rises above it — both fully outside the box.
+ * Knuckle mounting arm: cuboid below/behind the barrel, overlapping it.
+ * Y ∈ [-R, 0], Z ∈ [-(R+armH), -R] in knuckle-local coords (origin = axis).
+ */
+function knuckleArm(K: number, R: number, armH: number): any {
+  return translate([0, -R / 2, -(R + armH / 2)], cuboid({ size: [K, R, armH] }))
+}
+
+/**
+ * Box-side knuckle barrel: a C-clip — through bore with a slot to the top,
+ * pinched slightly narrower than the axle so it snaps in. Built as a single
+ * extrusion of the C profile (no booleans → manifold by construction).
+ * Local origin = hinge axis; barrel axis along X, slot opening up (+Z).
+ */
+function cClipBarrel(K: number, R: number, axleR: number): any {
+  const boreR = axleR + AXLE_CLEARANCE
+  const w = Math.max(2 * axleR - SNAP_PINCH, 0.6) / 2 // slot half-width
+  const aOut = Math.asin(w / R)
+  const aIn = Math.asin(w / boreR)
+
+  const pts: [number, number][] = []
+  // outer circle from the right slot edge, sweeping the full C
+  for (let i = 0; i <= HINGE_SEGS; i++) {
+    const t = aOut + (i / HINGE_SEGS) * (2 * Math.PI - 2 * aOut)
+    pts.push([R * Math.sin(t), R * Math.cos(t)])
+  }
+  // bore arc back from the left slot edge to the right
+  for (let i = 0; i <= HINGE_SEGS; i++) {
+    const t = (2 * Math.PI - aIn) - (i / HINGE_SEGS) * (2 * Math.PI - 2 * aIn)
+    pts.push([boreR * Math.sin(t), boreR * Math.cos(t)])
+  }
+  // polygon() needs CCW winding
+  let area = 0
+  for (let i = 0; i < pts.length; i++) {
+    const [x1, y1] = pts[i]
+    const [x2, y2] = pts[(i + 1) % pts.length]
+    area += x1 * y2 - x2 * y1
+  }
+  if (area < 0) pts.reverse()
+
+  // extrude along Z, then orient (x2,y2,z2) → (z2,x2,y2): axis along X,
+  // profile x → world Y, profile y → world Z
+  return translate([-K / 2, 0, 0],
+    rotate([Math.PI / 2, 0, 0],
+      rotate([0, Math.PI / 2, 0],
+        extrudeLinear({ height: K }, polygon({ points: pts })))))
+}
+
+/**
+ * All box-side hinge knuckles: two flanking C-clips per hinge position, each
+ * with a mounting arm reaching 10 mm down the outer back wall. Emitted as
+ * separate closed shells (see mergeSolids).
  */
 export function generateBoxHingeKnuckles(params: BoxParams): any {
   const { width, depth, height, wallThickness: wt, hingeCount, hingeDiameter, hingePinDiameter } = params
   const d2 = depth / 2, h2 = height / 2
-  const R  = hingeDiameter / 2
-  const r  = hingePinDiameter / 2
-  const K  = hingeDiameter
+  const R = hingeDiameter / 2
+  const axleR = hingePinDiameter / 2
+  const K = hingeDiameter
+  const dz = -R / 2 // barrel centre below local origin, same convention as before
 
-  // armH = wt+10 → arm spans box Z [h2-10, h2+wt]: 10 mm down the outer back
-  // wall + wt above the box top. The extra 10 mm gives a solid glue surface so
-  // the knuckle won't detach after printing.
-  const knuckle = makeKnuckle(K, R, r, wt + 10)
+  const clip = translate([0, 0, dz], cClipBarrel(K, R, axleR))
+  const arm = knuckleArm(K, R, wt + 10)
 
-  let geom: any = null
+  const solids: any[] = []
   for (const xC of hingeXPositions(hingeCount, width)) {
-    const xL = xC - K - HINGE_GAP
-    const xR = xC + K + HINGE_GAP
-    // Translate so local origin (barrel centre) lands at world Z = h2+wt+R.
-    // With dz=-R/2 inside makeKnuckle, actual barrel centre = h2+wt+R - R/2 = h2+wt+R/2.
-    // Lid: translated to lid-local Z=R → world Z=(h2+wt)+R-R/2 = h2+wt+R/2 ✓ (axes align)
-    const kL = translate([xL, d2 + R, h2 + wt + R], knuckle)
-    const kR = translate([xR, d2 + R, h2 + wt + R], knuckle)
-    geom = geom ? union(geom, union(kL, kR)) : union(kL, kR)
+    for (const x of [xC - K - HINGE_GAP, xC + K + HINGE_GAP]) {
+      solids.push(translate([x, d2 + R, h2 + wt + R], clip))
+      solids.push(translate([x, d2 + R, h2 + wt + R], arm))
+    }
   }
-  return geom
+  return mergeSolids(solids)
 }
 
 /**
- * All lid-side hinge knuckles as one JSCAD geometry.
- * One middle knuckle per hinge position.
- * Lid coords: cap top = Z 0, cap bottom = Z -wallThickness.
- * Arm spans lid Z [-wt, 0] (cap thickness); barrel spans [0, 2R] above cap top.
- * When seated: lid-local Z=R → box Z=h2+wt+R (matches box pin axis ✓).
+ * All lid-side hinge knuckles: one middle knuckle per hinge position — barrel
+ * plus both tapered snap-axle stubs as a single solid of revolution, and an
+ * arm spanning the flat lid's thickness (Z ∈ [-wt, 0]). Separate closed
+ * shells, no booleans. When closed: lid-local Z=R → box Z=h2+wt+R ✓.
  */
 export function generateLidHingeKnuckles(params: BoxParams): any {
   const { width, depth, wallThickness: wt, hingeCount, hingeDiameter, hingePinDiameter } = params
   const d2 = depth / 2
-  const R  = hingeDiameter / 2
-  const r  = hingePinDiameter / 2
-  const K  = hingeDiameter
+  const R = hingeDiameter / 2
+  const axleR = hingePinDiameter / 2
+  const K = hingeDiameter
+  const dz = -R / 2
 
-  const knuckle = makeKnuckle(K, R, r, wt)
+  // Revolve profile: [radius, axial] pairs, CCW — stub, barrel, stub
+  const tipR = Math.max(axleR - AXLE_TAPER, 0.3)
+  const h = K / 2
+  const e = AXLE_ENGAGE
+  const profile = polygon({
+    points: [
+      [0, -(h + e)], [tipR, -(h + e)], [axleR, -h], [R, -h],
+      [R, h], [axleR, h], [tipR, h + e], [0, h + e],
+    ],
+  })
+  const barrelWithStubs = translate([0, 0, dz],
+    rotate([0, Math.PI / 2, 0], extrudeRotate({ segments: HINGE_SEGS }, profile)))
+  const arm = knuckleArm(K, R, wt)
 
-  let geom: any = null
+  const solids: any[] = []
   for (const xC of hingeXPositions(hingeCount, width)) {
-    // Pivot at lid-local (xC, d2+R, R) — same world position as box pivot when assembled
-    const k = translate([xC, d2 + R, R], knuckle)
-    geom = geom ? union(geom, k) : k
+    solids.push(translate([xC, d2 + R, R], barrelWithStubs))
+    solids.push(translate([xC, d2 + R, R], arm))
   }
-  return geom
-}
-
-/**
- * Hinge pins — one per hinge position, printed lying flat at Y=0, Z=0.
- * Radius = hingePinDiameter/2 − 0.15 mm (press-fit clearance).
- * Length spans all three knuckles (2 box + 1 lid) plus 2 mm overhang each end.
- */
-export function generateHingePins(params: BoxParams): any {
-  const { width, hingeCount, hingeDiameter, hingePinDiameter } = params
-  const K         = hingeDiameter
-  const pinRadius = hingePinDiameter / 2 - 0.15
-  const pinLength = 3 * K + 2 * HINGE_GAP + 4
-
-  let geom: any = null
-  for (const xC of hingeXPositions(hingeCount, width)) {
-    const pin = rotate([0, Math.PI / 2, 0],
-      cylinder({ radius: pinRadius, height: pinLength, segments: HINGE_SEGS }))
-    geom = geom ? union(geom, translate([xC, 0, 0], pin)) : translate([xC, 0, 0], pin)
-  }
-  return geom
+  return mergeSolids(solids)
 }
 
 // ── Three.js conversion ───────────────────────────────────────────────────────

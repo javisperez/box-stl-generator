@@ -1,5 +1,5 @@
 import { Canvas } from '@react-three/fiber'
-import { OrbitControls, Grid } from '@react-three/drei'
+import { OrbitControls, Grid, Line } from '@react-three/drei'
 import * as THREE from 'three'
 
 interface BoxViewerProps {
@@ -8,12 +8,23 @@ interface BoxViewerProps {
   hingeBoxGeometry: THREE.BufferGeometry | null
   hingeLidGeometry: THREE.BufferGeometry | null
   boxHeight: number
-  // Placement of the lid/sleeve mesh, computed by App (differs per lid style)
-  lidOffsetX: number
-  lidOffsetZ: number
+  // Placement of the lid/sleeve mesh, computed by App (differs per lid style
+  // and flips/moves onto the box when "preview in place" is on)
+  lidPosition: [number, number, number]
+  lidRotation: [number, number, number]
+  // Printer plate footprint drawn on the ground (from Settings)
+  plateWidth?: number
+  plateDepth?: number
+  plateOversized?: boolean
 }
 
-export function BoxViewer({ geometry, lidGeometry, hingeBoxGeometry, hingeLidGeometry, boxHeight, lidOffsetX, lidOffsetZ }: BoxViewerProps) {
+export function BoxViewer({
+  geometry, lidGeometry, hingeBoxGeometry, hingeLidGeometry, boxHeight,
+  lidPosition, lidRotation, plateWidth, plateDepth, plateOversized,
+}: BoxViewerProps) {
+  const plateColor = plateOversized ? '#ef4444' : '#3b82f6'
+  const pw2 = (plateWidth ?? 0) / 2
+  const pd2 = (plateDepth ?? 0) / 2
   // Inside the group, Z is up (JSCAD convention). The group rotation converts Z-up → Y-up.
   // Box is centered at origin, so offset Z by height/2 to put the bottom on Z=0.
   const mat = (
@@ -21,7 +32,7 @@ export function BoxViewer({ geometry, lidGeometry, hingeBoxGeometry, hingeLidGeo
   )
 
   return (
-    <div className="w-full h-full bg-gray-900 rounded-lg overflow-hidden">
+    <div className="w-full h-full bg-gray-900">
       <Canvas
         camera={{ position: [100, 100, 100], fov: 50 }}
         style={{ background: '#1a1a1a' }}
@@ -31,6 +42,28 @@ export function BoxViewer({ geometry, lidGeometry, hingeBoxGeometry, hingeLidGeo
         <directionalLight position={[-10, -10, -5]} intensity={1} />
 
         <group rotation={[-Math.PI / 2, 0, 0]}>
+          {/* Printer plate footprint — flat outline on the ground, red when a part won't fit */}
+          {plateWidth && plateDepth ? (
+            <group>
+              <mesh position={[0, 0, 0.05]}>
+                <planeGeometry args={[plateWidth, plateDepth]} />
+                <meshBasicMaterial color={plateColor} transparent opacity={0.06} side={THREE.DoubleSide} depthWrite={false} />
+              </mesh>
+              <Line
+                points={[
+                  [-pw2, -pd2, 0.1],
+                  [pw2, -pd2, 0.1],
+                  [pw2, pd2, 0.1],
+                  [-pw2, pd2, 0.1],
+                  [-pw2, -pd2, 0.1],
+                ]}
+                color={plateColor}
+                lineWidth={1.5}
+                transparent
+                opacity={0.7}
+              />
+            </group>
+          ) : null}
           {geometry && (
             <mesh geometry={geometry} position={[0, 0, boxHeight / 2]}>{mat}</mesh>
           )}
@@ -38,10 +71,10 @@ export function BoxViewer({ geometry, lidGeometry, hingeBoxGeometry, hingeLidGeo
             <mesh geometry={hingeBoxGeometry} position={[0, 0, boxHeight / 2]}>{mat}</mesh>
           )}
           {lidGeometry && (
-            <mesh geometry={lidGeometry} position={[lidOffsetX, 0, lidOffsetZ]}>{mat}</mesh>
+            <mesh geometry={lidGeometry} position={lidPosition} rotation={lidRotation}>{mat}</mesh>
           )}
           {hingeLidGeometry && (
-            <mesh geometry={hingeLidGeometry} position={[lidOffsetX, 0, lidOffsetZ]}>{mat}</mesh>
+            <mesh geometry={hingeLidGeometry} position={lidPosition} rotation={lidRotation}>{mat}</mesh>
           )}
         </group>
 
