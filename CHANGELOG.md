@@ -16,6 +16,11 @@ with date-based entries since the project has no version releases.
 - Deploy workflow failed on push to main: the workflow pinned Node 20, but
   pnpm 11 (installed via `version: latest`) requires Node ≥ 22.13, and GitHub
   is deprecating Node 20 on runners. The workflow now uses Node 24.
+- Deploy workflow then failed on `pnpm install` with ERR_PNPM_IGNORED_BUILDS:
+  pnpm 10+ blocks dependency install scripts unless approved. esbuild's build
+  script is now allowlisted in `pnpm-workspace.yaml`, and the pnpm version is
+  pinned via the `packageManager` field (CI previously floated on `latest`,
+  the root cause of both breakages).
 
 ## 2026-07-10
 
