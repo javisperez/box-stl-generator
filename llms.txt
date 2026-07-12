@@ -1,0 +1,103 @@
+# 3D Box Generator
+
+> A single-page React + TypeScript web app that parametrically models 3D-printable
+> boxes (with compartments, chamfers, and a cap lid / drawer sleeve / hinged lid)
+> using @jscad/modeling, renders them live with Three.js / React Three Fiber, and
+> exports watertight STL files. Everything runs client-side in the browser —
+> there is no backend, no server-side rendering, no API calls.
+
+Live app: https://javisperez.github.io/box-stl-generator/
+License: Mozilla Public License 2.0 (see LICENSE)
+
+## Setup
+
+- Package manager is pnpm, pinned via the `packageManager` field in package.json —
+  do not use npm/yarn. Requires Node.js 22.13+ (pnpm 10+ requirement).
+- `pnpm install` / `pnpm run dev` / `pnpm run build` (runs `tsc` then `vite build`) /
+  `pnpm run preview`.
+- CI/CD: .github/workflows/deploy.yml builds and deploys to GitHub Pages on every
+  push to `main`. No test suite exists; `pnpm run build` (type-check + bundle) is
+  the closest thing to CI validation — run it before considering a change done.
+
+## Architecture
+
+All geometry is built with @jscad/modeling (a CSG-free, functional solid-modeling
+library) and converted to a THREE.BufferGeometry only at the last step for display
+(`jscadToThreeGeometry` in boxGenerator.ts) or for STL export (stlExporter.ts).
+
+- **src/utils/boxGenerator.ts** (~1100 lines) — the core geometry engine and the
+  single most important file. Defines `BoxParams` (the one big interface holding
+  every parameter for box + lid + sleeve + hinge + text + pattern), and the
+  generator functions: `generateBox`, `generateLid`, `generateSleeve`,
+  `generateBoxHingeKnuckles`, `generateLidHingeKnuckles`. Box walls, dividers,
+  and chamfers are built with **direct polygon/extrusion construction, not CSG
+  booleans** — this is deliberate (see Hinge geometry rule below) and guarantees
+  manifold output. `sleeveOuterDims` computes the sleeve's outer footprint.
+- **src/utils/textGenerator.ts** — turns a text/emoji string into jscad geometry
+  (`textToJscadGeometry`) for engraving/embossing onto the lid.
+- **src/utils/stlExporter.ts** — `exportJscadToSTL` / `exportMultipleJscadToSTL`
+  run jscad's snap + T-junction repair + triangulation before writing the binary
+  STL, to guarantee zero open edges even for CSG-built parts (sleeve, text lids).
+  `jscadVolumeCm3` estimates material usage (shown as PLA grams in the UI).
+- **src/utils/projectStorage.ts** — `BoxParams` defaults, localStorage
+  persistence (current params, app settings, saved named projects), JSON
+  export/import of a single project (`exportProjectFile` / `parseProjectFile`),
+  and `normalizeParams` which back-fills missing fields so old saved projects /
+  imported JSON stay forward-compatible when new params are added.
+- **src/components/ControlPanel.tsx** (~1100 lines) — the entire left-hand UI:
+  four tabs (Generator, Box, Lid, Settings). Generator tab has three sub-tools
+  (Volume Calculator, Compartment Calculator, Division Designer) that compute
+  and apply a full `BoxParams` patch. Also owns `PRINTER_PRESETS` (bed sizes)
+  and `LID_PATTERNS`.
+- **src/components/BoxViewer.tsx** — React Three Fiber canvas: orbit controls,
+  lighting, and rendering the generated meshes.
+- **src/App.tsx** — top-level state (the live `BoxParams`, active project,
+  settings), wires ControlPanel to BoxViewer, and owns the floating export
+  control (per-part STL download buttons with footprint + material estimate).
+- **src/components/ui/** — small shadcn/ui-style primitives (button, label,
+  slider). Styling is Tailwind CSS v4 (via @tailwindcss/vite).
+
+## Domain rules (non-obvious, learned from past bugs — do not violate)
+
+- **No JSCAD boolean operations in hinge geometry.** Booleans on split faces
+  leave slivers/unrepairable open edges in the exported STL. Hinge knuckles,
+  barrels, and clips are each built as their own closed shell via
+  extrude/revolve, never via CSG subtract/union. See generateBoxHingeKnuckles /
+  generateLidHingeKnuckles.
+- **Hinged lids are flat slabs modeled in their closed (assembled) orientation**
+  — not the open/printed orientation of a barrel hinge. There is no lip on a
+  hinged lid (a lip can't coexist with a flat, hinge-holding lid); lid text
+  goes on the top face. Lip height and tolerance controls are hidden in the UI
+  when `includeHinge` is true.
+- **Lid divider notches and lid text are pre-mirrored** at generation time,
+  because the lid is physically used flipped over. Do not "fix" the mirroring
+  without checking how the lid is actually placed when closing onto the box.
+- **`divisionThickness` is always clamped to `[0.4, wallThickness]`** via
+  `clampDivisionThickness` — a divider can never be thicker than the outer wall.
+- **All exported parts are expected to be watertight (0 open edges).** If you
+  change geometry generation, re-verify export integrity (box, lid, hinged lid,
+  text lids, sleeve) rather than assuming it still holds.
+- **Snap-hinge dimensional constants are untested on a real printer** — treat
+  hinge fit/clearance values as provisional, not authoritative, until confirmed
+  by an actual print.
+
+## Where to look for a given change
+
+- New box/lid/sleeve/hinge geometry or a dimensional bug → boxGenerator.ts
+- STL export correctness / open-edge or repair issues → stlExporter.ts
+- New UI control, tab, or generator tool → ControlPanel.tsx (and add the field
+  to BoxParams in boxGenerator.ts + DEFAULTS in projectStorage.ts)
+- Viewport rendering/camera/lighting → BoxViewer.tsx
+- Save/load/import/export of designs, or adding a new persisted param → projectStorage.ts
+- Export filenames, per-part download buttons, material estimates → App.tsx
+- CI/deploy breakage → .github/workflows/deploy.yml (pnpm version is pinned via
+  package.json's `packageManager` field; do not let CI float pnpm to `latest`)
+
+## Conventions
+
+- Update CHANGELOG.md (date-based sections, Keep a Changelog style) with every
+  meaningful change batch.
+- Prefer pnpm commands over npm/yarn in docs, scripts, and CI.
+- When adding a new BoxParams field, also add its default in
+  projectStorage.ts's DEFAULTS and handle it in normalizeParams so existing
+  localStorage state and older exported JSON files don't break.
