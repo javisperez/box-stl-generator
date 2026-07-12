@@ -2,7 +2,7 @@ import { primitives, booleans, transforms } from '@jscad/modeling'
 
 const { cuboid } = primitives
 const { union } = booleans
-const { translate } = transforms
+const { translate, rotate } = transforms
 
 const PIXELS_PER_MM = 2
 
@@ -10,18 +10,27 @@ const PIXELS_PER_MM = 2
  * Renders text (including emojis) to a canvas and converts the result
  * to JSCAD geometry as a block of merged cuboids.
  * Returns geometry centered at origin on X/Y, with Z from 0 to textDepth.
+ *
+ * rotationDeg rotates the text CCW on the surface (0 | 90 | 180 | 270). At
+ * 90/270 the render frame is swapped so the text gets the surface's depth as
+ * its running length instead of its width.
  */
 export function textToJscadGeometry(
   text: string,
   lidWidth: number,
   lidDepth: number,
   fontSize: number,
-  textDepth: number
+  textDepth: number,
+  rotationDeg: number = 0
 ): ReturnType<typeof cuboid> | null {
   if (!text.trim()) return null
 
-  const canvasW = Math.round(lidWidth * PIXELS_PER_MM)
-  const canvasH = Math.round(lidDepth * PIXELS_PER_MM)
+  const swapFrame = rotationDeg % 180 !== 0
+  const frameW = swapFrame ? lidDepth : lidWidth
+  const frameD = swapFrame ? lidWidth : lidDepth
+
+  const canvasW = Math.round(frameW * PIXELS_PER_MM)
+  const canvasH = Math.round(frameD * PIXELS_PER_MM)
   const scaledFontSize = Math.round(fontSize * PIXELS_PER_MM)
 
   // Render text to canvas
@@ -59,8 +68,8 @@ export function textToJscadGeometry(
         const runLength = col - runStart
         const w = runLength * mmPerPixel
         const h = mmPerPixel
-        const xCenter = (runStart + runLength / 2) * mmPerPixel - lidWidth / 2
-        const yCenter = lidDepth / 2 - (row + 0.5) * mmPerPixel
+        const xCenter = (runStart + runLength / 2) * mmPerPixel - frameW / 2
+        const yCenter = frameD / 2 - (row + 0.5) * mmPerPixel
 
         const block = cuboid({ size: [w, h, textDepth] })
         runs.push(translate([xCenter, yCenter, textDepth / 2], block))
@@ -70,7 +79,6 @@ export function textToJscadGeometry(
   }
 
   if (runs.length === 0) return null
-  if (runs.length === 1) return runs[0]
 
   // Batch union for better performance: tree-reduce instead of sequential
   let current = runs
@@ -86,5 +94,8 @@ export function textToJscadGeometry(
     current = next
   }
 
-  return current[0]
+  const result = current[0]
+  return rotationDeg
+    ? rotate([0, 0, (rotationDeg * Math.PI) / 180], result)
+    : result
 }
