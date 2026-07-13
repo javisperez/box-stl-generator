@@ -564,6 +564,59 @@ export function ControlPanel({
                 </div>
               ))}
             </div>
+
+            <div className="space-y-2">
+              <Label>Cutout Pattern</Label>
+              <div className="grid grid-cols-4 gap-2">
+                {LID_PATTERNS.map(({ value, label }) => (
+                  <button
+                    key={value}
+                    className={`px-2 py-1.5 text-sm rounded-md border ${params.boxPattern === value ? 'bg-primary text-primary-foreground' : 'bg-background'}`}
+                    onClick={() => updateParam('boxPattern', value)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Holes cut through the box's side walls and floor to save filament.
+                {params.includeHinge && ' The back wall stays solid to support the hinge.'}
+              </p>
+
+              {params.boxPattern !== 'none' && (
+                <div className="space-y-4 pt-1">
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-center">
+                      <Label>Cutout Size (mm)</Label>
+                      <span className="text-sm text-muted-foreground">{params.boxPatternSize}</span>
+                    </div>
+                    <Slider
+                      min={3}
+                      max={25}
+                      step={0.5}
+                      value={params.boxPatternSize}
+                      onValueChange={(value) => updateParam('boxPatternSize', value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-center">
+                      <Label>Cutout Spacing (mm)</Label>
+                      <span className="text-sm text-muted-foreground">{params.boxPatternSpacing}</span>
+                    </div>
+                    <Slider
+                      min={2}
+                      max={15}
+                      step={0.5}
+                      value={params.boxPatternSpacing}
+                      onValueChange={(value) => updateParam('boxPatternSpacing', value)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Wider spacing means a stronger part; larger cutouts save more filament.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -664,7 +717,7 @@ export function ControlPanel({
                   </div>
                   <p className="text-xs text-muted-foreground">
                     {isSleeveStyle
-                      ? 'Holes cut through the sleeve\'s top and bottom walls to save filament.'
+                      ? 'Holes cut through the sleeve\'s top, bottom, side, and back walls to save filament.'
                       : 'Holes cut through the lid to save filament.'}
                     {' '}Text always keeps a solid patch around it.
                   </p>
