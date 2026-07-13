@@ -39,6 +39,9 @@ export interface BoxParams {
   lidPattern: LidPattern       // cutout pattern through the lid cap / sleeve walls
   lidPatternSize: number       // feature size across, in mm
   lidPatternSpacing: number    // gap between features, in mm
+  boxPattern: LidPattern       // cutout pattern through the box's 4 outer side walls
+  boxPatternSize: number       // feature size across, in mm
+  boxPatternSpacing: number    // gap between features, in mm
   chamferSize: number        // 45° chamfer on outer vertical edges (0 = none)
   includeHinge: boolean
   hingeCount: number         // number of hinges along the back edge (1–3)
@@ -267,7 +270,14 @@ export function generateBox(params: BoxParams) {
       (x0, x1) => isXDiv(x0, x1))
   }
 
-  return { polygons: polys }
+  let box: any = { polygons: polys }
+  if (params.boxPattern !== 'none') {
+    const wallHoles = boxWallHoles(params)
+    const floorHoles = boxFloorHoles(params)
+    const holes = wallHoles && floorHoles ? union(wallHoles, floorHoles) : wallHoles || floorHoles
+    if (holes) box = subtract(asGeom3(box), holes)
+  }
+  return box
 }
 
 // ── Cutout patterns ───────────────────────────────────────────────────────────
@@ -298,17 +308,16 @@ function patternHalfExtents(pattern: LidPattern, size: number): [number, number]
 }
 
 /**
- * Build the union of all pattern hole prisms for the given region, spanning
- * zFrom..zTo. Returns null when the pattern is off or nothing fits.
- * Rows are staggered by half a pitch (except squares and slots); triangles
- * alternate point-up/point-down so they tessellate.
+ * Grid of (x, y) hole centers within a 2D region, honoring exclusion rects.
+ * Shared by every cutout context (lid cap, sleeve walls, box walls) — each
+ * maps these (u, v) coordinates into world space differently. Returns null
+ * when the pattern is off or nothing fits. Rows are staggered by half a pitch
+ * (except squares and slots); `alt` marks triangles that should point the
+ * opposite way so they tessellate.
  */
-function patternPrisms(params: BoxParams, region: Rect2, zFrom: number, zTo: number, exclusions: Rect2[]): any | null {
-  const pattern = params.lidPattern
-  if (pattern === 'none') return null
-  const size = Math.max(2, params.lidPatternSize)
-  const spacing = Math.max(1.5, params.lidPatternSpacing)
-
+function patternGrid(
+  pattern: LidPattern, size: number, spacing: number, region: Rect2, exclusions: Rect2[]
+): { x: number; y: number; alt: boolean }[] | null {
   const [hx, hy] = patternHalfExtents(pattern, size)
   let px = hx * 2 + spacing
   let py = hy * 2 + spacing
@@ -336,16 +345,8 @@ function patternPrisms(params: BoxParams, region: Rect2, zFrom: number, zTo: num
   const startX = region.x0 + (W - gridW) / 2 + hx
   const startY = region.y0 + (D - gridD) / 2 + hy
 
-  const shape = patternShape2D(pattern, size)
-  if (!shape) return null
-  const h = zTo - zFrom
-  const prism = extrudeLinear({ height: h }, shape)
-  const prismAlt = pattern === 'triangles'
-    ? extrudeLinear({ height: h }, rotate([0, 0, Math.PI], shape))
-    : prism
-
   const stagger = pattern !== 'squares' && pattern !== 'slots'
-  const holes: any[] = []
+  const positions: { x: number; y: number; alt: boolean }[] = []
   for (let row = 0; row < ny; row++) {
     const y = startY + row * py
     const odd = row % 2 === 1
@@ -354,14 +355,16 @@ function patternPrisms(params: BoxParams, region: Rect2, zFrom: number, zTo: num
     for (let col = 0; col < count; col++) {
       const x = startX + col * px + offset
       if (exclusions.some((r) => x + hx > r.x0 && x - hx < r.x1 && y + hy > r.y0 && y - hy < r.y1)) continue
-      const p = pattern === 'triangles' && (col + row) % 2 === 1 ? prismAlt : prism
-      holes.push(translate([x, y, zFrom], p))
+      positions.push({ x, y, alt: pattern === 'triangles' && (col + row) % 2 === 1 })
     }
   }
-  if (holes.length === 0) return null
+  return positions.length ? positions : null
+}
 
-  // Tree-reduce union (holes are disjoint, but jscad still wants one geometry)
-  let current = holes
+// Tree-reduce union (pieces are disjoint, but jscad still wants one geometry)
+function unionAll(geoms: any[]): any | null {
+  if (geoms.length === 0) return null
+  let current = geoms
   while (current.length > 1) {
     const next: any[] = []
     for (let i = 0; i < current.length; i += 2) {
@@ -370,6 +373,146 @@ function patternPrisms(params: BoxParams, region: Rect2, zFrom: number, zTo: num
     current = next
   }
   return current[0]
+}
+
+/**
+ * Build the union of all pattern hole prisms for the given region, spanning
+ * zFrom..zTo (holes extrude straight through Z). Shared by the lid cap, the
+ * sleeve's top/bottom walls, and the box floor.
+ */
+function zExtrudedPatternHoles(
+  pattern: LidPattern, size: number, spacing: number, region: Rect2, zFrom: number, zTo: number, exclusions: Rect2[]
+): any | null {
+  if (pattern === 'none') return null
+  const positions = patternGrid(pattern, size, spacing, region, exclusions)
+  if (!positions) return null
+
+  const shape = patternShape2D(pattern, size)
+  if (!shape) return null
+  const h = zTo - zFrom
+  const prism = extrudeLinear({ height: h }, shape)
+  const prismAlt = pattern === 'triangles'
+    ? extrudeLinear({ height: h }, rotate([0, 0, Math.PI], shape))
+    : prism
+
+  return unionAll(positions.map((p) => translate([p.x, p.y, zFrom], p.alt ? prismAlt : prism)))
+}
+
+function patternPrisms(params: BoxParams, region: Rect2, zFrom: number, zTo: number, exclusions: Rect2[]): any | null {
+  return zExtrudedPatternHoles(
+    params.lidPattern, Math.max(2, params.lidPatternSize), Math.max(1.5, params.lidPatternSpacing),
+    region, zFrom, zTo, exclusions
+  )
+}
+
+/**
+ * Cutout pattern through the box's 4 outer side walls (front/back/left/right)
+ * to save filament. Divider walls stay solid — see boxFloorHoles for the
+ * floor. Each wall's holes are laid out in the wall's own (u, v) plane —
+ * u = position along the wall, v = height — then a canonical Z-extruded
+ * prism is rotated so it punches through the wall's actual thickness axis
+ * (Y for front/back, X for left/right) before being translated into place.
+ * Margins keep holes clear of the top rim, the floor, and the
+ * corners/chamfers.
+ *
+ * When a hinge is present, the back wall is skipped: its top strip carries
+ * the hinge knuckle mounting arms and needs to stay solid.
+ */
+function boxWallHoles(params: BoxParams): any | null {
+  const { width, depth, height, wallThickness: wt, chamferSize, includeHinge, boxPattern } = params
+  if (boxPattern === 'none') return null
+
+  const w2 = width / 2, d2 = depth / 2, h2 = height / 2
+  const c = Math.min(chamferSize, wt, width / 4, depth / 4)
+  const marginH = Math.max(c, 1) + 2   // clear of corners/chamfers
+  const marginV = wt + 2               // clear of the top rim and floor
+
+  const zTop = h2 - marginV
+  const zBot = -h2 + marginV
+  if (zTop <= zBot) return null
+
+  const size = Math.max(2, params.boxPatternSize)
+  const spacing = Math.max(1.5, params.boxPatternSpacing)
+  const shape = patternShape2D(boxPattern, size)
+  if (!shape) return null
+
+  const h = wt + 1 // through-thickness, overshooting both faces slightly
+  const prism = extrudeLinear({ height: h }, shape)
+  const prismAlt = boxPattern === 'triangles'
+    ? extrudeLinear({ height: h }, rotate([0, 0, Math.PI], shape))
+    : prism
+
+  const solids: any[] = []
+
+  // Front & back walls: u = X, v = Z, extrusion punches through Y
+  const fbRegion: Rect2 = { x0: -w2 + marginH, x1: w2 - marginH, y0: zBot, y1: zTop }
+  const fbPositions = patternGrid(boxPattern, size, spacing, fbRegion, [])
+  if (fbPositions) {
+    // rotate 90° about X: (x,y,z) -> (x, -z, y) — z (extrusion) becomes Y, y (shape) stays as Z
+    const fPrism = rotate([Math.PI / 2, 0, 0], prism)
+    const fPrismAlt = rotate([Math.PI / 2, 0, 0], prismAlt)
+    for (const p of fbPositions) {
+      solids.push(translate([p.x, -d2 - 0.5 + h, p.y], p.alt ? fPrismAlt : fPrism))
+    }
+    if (!includeHinge) {
+      // rotate -90° about X: (x,y,z) -> (x, z, -y)
+      const bPrism = rotate([-Math.PI / 2, 0, 0], prism)
+      const bPrismAlt = rotate([-Math.PI / 2, 0, 0], prismAlt)
+      for (const p of fbPositions) {
+        solids.push(translate([p.x, d2 + 0.5 - h, p.y], p.alt ? bPrismAlt : bPrism))
+      }
+    }
+  }
+
+  // Left & right walls: u = Y, v = Z, extrusion punches through X
+  const lrRegion: Rect2 = { x0: -d2 + marginH, x1: d2 - marginH, y0: zBot, y1: zTop }
+  const lrPositions = patternGrid(boxPattern, size, spacing, lrRegion, [])
+  if (lrPositions) {
+    // compound rotate: (x,y,z) -> (z,x,y) — z (extrusion) becomes X, x/y (shape) become Y/Z
+    const sPrism = rotate([0, Math.PI / 2, 0], rotate([0, 0, Math.PI / 2], prism))
+    const sPrismAlt = rotate([0, Math.PI / 2, 0], rotate([0, 0, Math.PI / 2], prismAlt))
+    const iw2 = w2 - wt
+    for (const p of lrPositions) {
+      solids.push(translate([-w2 - 0.5, p.x, p.y], p.alt ? sPrismAlt : sPrism)) // left
+      solids.push(translate([iw2 - 0.5, p.x, p.y], p.alt ? sPrismAlt : sPrism)) // right
+    }
+  }
+
+  return unionAll(solids)
+}
+
+/**
+ * Cutout pattern through the box floor, straight through Z like the lid cap.
+ * Confined to the inner cavity footprint (inset from the outer walls, which
+ * sit on the floor's perimeter) with strips excluded under each divider —
+ * both need solid floor beneath them to bond to.
+ */
+function boxFloorHoles(params: BoxParams): any | null {
+  const { width, depth, height, wallThickness: wt, divisionsX, divisionsZ, divisionThickness, boxPattern } = params
+  if (boxPattern === 'none') return null
+
+  const h2 = height / 2
+  const iw2 = width / 2 - wt
+  const id2 = depth / 2 - wt
+  const dt = clampDivisionThickness(divisionThickness, wt)
+  const margin = 1.5 // clear of the inner wall faces
+
+  const region: Rect2 = { x0: -iw2 + margin, x1: iw2 - margin, y0: -id2 + margin, y1: id2 - margin }
+
+  const exclusions: Rect2[] = []
+  for (const pct of divisionsX) {
+    const x = -iw2 + (pct / 100) * (2 * iw2)
+    exclusions.push({ x0: x - dt / 2 - margin, x1: x + dt / 2 + margin, y0: -id2 - 1, y1: id2 + 1 })
+  }
+  for (const pct of divisionsZ) {
+    const y = -id2 + (pct / 100) * (2 * id2)
+    exclusions.push({ x0: -iw2 - 1, x1: iw2 + 1, y0: y - dt / 2 - margin, y1: y + dt / 2 + margin })
+  }
+
+  return zExtrudedPatternHoles(
+    boxPattern, Math.max(2, params.boxPatternSize), Math.max(1.5, params.boxPatternSpacing),
+    region, -h2 - 0.5, -h2 + wt + 0.5, exclusions
+  )
 }
 
 // A padded Rect2 around geometry's XY bounding box (for text exclusion zones)
@@ -814,6 +957,70 @@ export function sleeveOuterDims(params: BoxParams): { w: number; d: number; h: n
   }
 }
 
+/**
+ * Cutout pattern through the sleeve's left, right, and back walls (the front
+ * is open, so there's nothing to punch there). Same technique as the box's
+ * side walls: holes are laid out in each wall's own (u, v) plane, then a
+ * canonical Z-extruded prism is rotated onto the wall's actual thickness axis
+ * (X for left/right, Y for back) before being translated into place. Margins
+ * keep holes clear of the top/bottom plates (already perforated separately),
+ * the front opening, and the back/side corners.
+ */
+function sleeveWallHoles(params: BoxParams): any | null {
+  const { wallThickness: wt, lidPattern, lidPatternSize, lidPatternSpacing } = params
+  if (lidPattern === 'none') return null
+
+  const { w: outerW, d: outerD, h: outerH } = sleeveOuterDims(params)
+  const w2 = outerW / 2, d2 = outerD / 2, h2 = outerH / 2
+  const innerW = outerW - 2 * wt
+
+  const marginV = wt + 2 // clear of the top/bottom plates
+  const zTop = h2 - marginV
+  const zBot = -h2 + marginV
+  if (zTop <= zBot) return null
+
+  const size = Math.max(2, lidPatternSize)
+  const spacing = Math.max(1.5, lidPatternSpacing)
+  const shape = patternShape2D(lidPattern, size)
+  if (!shape) return null
+
+  const h = wt + 1 // through-thickness, overshooting both faces slightly
+  const prism = extrudeLinear({ height: h }, shape)
+  const prismAlt = lidPattern === 'triangles'
+    ? extrudeLinear({ height: h }, rotate([0, 0, Math.PI], shape))
+    : prism
+
+  const solids: any[] = []
+
+  // Left & right walls: u = Y (depth), v = Z, extrusion punches through X
+  const lrRegion: Rect2 = { x0: -d2 + 4, x1: d2 - 4, y0: zBot, y1: zTop }
+  const lrPositions = patternGrid(lidPattern, size, spacing, lrRegion, [])
+  if (lrPositions) {
+    // compound rotate: (x,y,z) -> (z,x,y) — z (extrusion) becomes X, x/y (shape) become Y/Z
+    const sPrism = rotate([0, Math.PI / 2, 0], rotate([0, 0, Math.PI / 2], prism))
+    const sPrismAlt = rotate([0, Math.PI / 2, 0], rotate([0, 0, Math.PI / 2], prismAlt))
+    const iw2 = w2 - wt
+    for (const p of lrPositions) {
+      solids.push(translate([-w2 - 0.5, p.x, p.y], p.alt ? sPrismAlt : sPrism)) // left
+      solids.push(translate([iw2 - 0.5, p.x, p.y], p.alt ? sPrismAlt : sPrism)) // right
+    }
+  }
+
+  // Back wall: u = X, v = Z, extrusion punches through Y
+  const backRegion: Rect2 = { x0: -(innerW / 2 - 1.5), x1: innerW / 2 - 1.5, y0: zBot, y1: zTop }
+  const backPositions = patternGrid(lidPattern, size, spacing, backRegion, [])
+  if (backPositions) {
+    // rotate -90° about X: (x,y,z) -> (x, z, -y)
+    const bPrism = rotate([-Math.PI / 2, 0, 0], prism)
+    const bPrismAlt = rotate([-Math.PI / 2, 0, 0], prismAlt)
+    for (const p of backPositions) {
+      solids.push(translate([p.x, d2 + 0.5 - h, p.y], p.alt ? bPrismAlt : bPrism))
+    }
+  }
+
+  return unionAll(solids)
+}
+
 export function generateSleeve(params: BoxParams, textGeometry?: any): any {
   const { width, depth, wallThickness: wt, sleeveTolerance: tol, sleeveCutout, lidTextStyle, lidTextDepth } = params
   const { w: outerW, d: outerD, h: outerH } = sleeveOuterDims(params)
@@ -846,8 +1053,9 @@ export function generateSleeve(params: BoxParams, textGeometry?: any): any {
   }
 
   // Cutout pattern: full-height prisms perforate the top AND bottom walls in
-  // matching positions (the middle is cavity air). Solid margins are kept at
-  // the opening, the back wall, the sides, the finger notch, and the text.
+  // matching positions (the middle is cavity air), plus the left, right, and
+  // back walls (see sleeveWallHoles). Solid margins are kept at the opening,
+  // the back wall, the sides, the finger notch, and the text.
   if (params.lidPattern !== 'none') {
     const exclusions: Rect2[] = []
     if (sleeveCutout) {
@@ -863,7 +1071,9 @@ export function generateSleeve(params: BoxParams, textGeometry?: any): any {
       y0: -outerD / 2 + 4,
       y1: outerD / 2 - wt - 1.5,
     }
-    const holes = patternPrisms(params, region, -outerH / 2 - 0.5, outerH / 2 + 0.5, exclusions)
+    const plateHoles = patternPrisms(params, region, -outerH / 2 - 0.5, outerH / 2 + 0.5, exclusions)
+    const wallHoles = sleeveWallHoles(params)
+    const holes = plateHoles && wallHoles ? union(plateHoles, wallHoles) : plateHoles || wallHoles
     if (holes) sleeve = subtract(sleeve, holes)
   }
 

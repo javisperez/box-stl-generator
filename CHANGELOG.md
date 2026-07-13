@@ -4,6 +4,23 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 with date-based entries since the project has no version releases.
 
+## 2026-07-13
+
+### Added
+- **Box wall and floor cutout patterns.** The Box tab now has the same cutout
+  pattern picker as the Lid tab (circles, squares, diamonds, hexagons,
+  triangles, slots), punched through the box's 4 outer side walls and its
+  floor to save filament. Wall holes stay clear of the top rim, floor, and
+  corners/chamfers; when a snap hinge is enabled the back wall is left solid
+  since it carries the hinge knuckle mounting arms. Floor holes stay inside
+  the inner cavity footprint, with solid strips preserved under any divider
+  walls so they still bond to the floor.
+- **Sleeve side/back wall cutout patterns.** The drawer sleeve's cutout
+  pattern (previously top/bottom plates only) now also perforates the left,
+  right, and back walls — the front is open, so there's nothing to cut
+  there. Holes stay clear of the top/bottom plates, the front opening, the
+  finger notch, and the text.
+
 ## 2026-07-12
 
 ### Changed

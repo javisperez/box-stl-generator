@@ -19,6 +19,9 @@ export const DEFAULTS: BoxParams = {
   lidPattern: 'none' as const,
   lidPatternSize: 8,
   lidPatternSpacing: 4,
+  boxPattern: 'none' as const,
+  boxPatternSize: 8,
+  boxPatternSpacing: 4,
   chamferSize: 0,
   includeHinge: false,
   hingeCount: 1,
@@ -88,6 +91,9 @@ export function normalizeParams(raw: unknown): BoxParams {
   if (!LID_PATTERNS.some(o => o.value === p.lidPattern)) p.lidPattern = 'none'
   p.lidPatternSize = Math.min(Math.max(Number(p.lidPatternSize) || 8, 2), 30)
   p.lidPatternSpacing = Math.min(Math.max(Number(p.lidPatternSpacing) || 4, 1.5), 20)
+  if (!LID_PATTERNS.some(o => o.value === p.boxPattern)) p.boxPattern = 'none'
+  p.boxPatternSize = Math.min(Math.max(Number(p.boxPatternSize) || 8, 2), 30)
+  p.boxPatternSpacing = Math.min(Math.max(Number(p.boxPatternSpacing) || 4, 1.5), 20)
   if (!Array.isArray(p.divisionsX)) p.divisionsX = []
   if (!Array.isArray(p.divisionsZ)) p.divisionsZ = []
   return p
