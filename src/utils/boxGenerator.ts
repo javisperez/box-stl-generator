@@ -81,13 +81,19 @@ export function generateBox(params: BoxParams) {
   for (const y of yDivs) { yIn.push(y - dt / 2, y + dt / 2) }
   yIn.push(id2)
 
+  // Collapse breakpoints that coincide (e.g. chamfer == wall thickness makes
+  // -w2+c equal -iw2). A duplicated breakpoint would emit zero-width cells —
+  // zero-area polygons whose plane is null, which poison the CSG tree when a
+  // cutout pattern is subtracted (every hole lining gets dropped).
+  const dedupe = (bps: number[]) => bps.filter((v, i) => i === 0 || v - bps[i - 1] > 1e-9)
+
   // Full breakpoints (outer + inner)
-  const xAll = [-w2, ...xIn, w2]
-  const yAll = [-d2, ...yIn, d2]
+  const xAll = dedupe([-w2, ...xIn, w2])
+  const yAll = dedupe([-d2, ...yIn, d2])
 
   // Chamfer breakpoints (add intermediate points for chamfer edges)
-  const xAllC = c > 0 ? [-w2, -w2 + c, ...xIn, w2 - c, w2] : xAll
-  const yAllC = c > 0 ? [-d2, -d2 + c, ...yIn, d2 - c, d2] : yAll
+  const xAllC = c > 0 ? dedupe([-w2, -w2 + c, ...xIn, w2 - c, w2]) : xAll
+  const yAllC = c > 0 ? dedupe([-d2, -d2 + c, ...yIn, d2 - c, d2]) : yAll
 
   type V = [number, number, number]
   const polys: { vertices: V[] }[] = []
@@ -136,10 +142,10 @@ export function generateBox(params: BoxParams) {
           polys.push({ vertices: [[x0,y0,-h2],[x0,y1,-h2],[x1,y1,-h2]] })
         } else if (isFirstX && isLastY) {
           // Top-left corner
-          polys.push({ vertices: [[x0,y0,-h2],[x1,y0,-h2],[x1,y1,-h2]] })
+          polys.push({ vertices: [[x0,y0,-h2],[x1,y1,-h2],[x1,y0,-h2]] })
         } else if (isLastX && isLastY) {
           // Top-right corner
-          polys.push({ vertices: [[x0,y0,-h2],[x1,y0,-h2],[x0,y1,-h2]] })
+          polys.push({ vertices: [[x0,y0,-h2],[x0,y1,-h2],[x1,y0,-h2]] })
         } else {
           // Regular quad
           polys.push({ vertices: [[x0,y0,-h2],[x0,y1,-h2],[x1,y1,-h2],[x1,y0,-h2]] })
@@ -160,15 +166,18 @@ export function generateBox(params: BoxParams) {
     grid(yAllC, [-h2, h2], (y0, y1, z0, z1) => [[-w2,y1,z0],[-w2,y0,z0],[-w2,y0,z1],[-w2,y1,z1]],
       (y0, y1) => atMinY(y0) || atMaxY(y1))
 
-    // 4 chamfer face strips (vertical, full height)
-    // Front-left: from (-w2, -d2+c) to (-w2+c, -d2)
-    polys.push({ vertices: [[-w2+c,-d2,-h2],[-w2,-d2+c,-h2],[-w2,-d2+c,h2],[-w2+c,-d2,h2]] })
-    // Front-right: from (w2-c, -d2) to (w2, -d2+c)
-    polys.push({ vertices: [[w2,-d2+c,-h2],[w2-c,-d2,-h2],[w2-c,-d2,h2],[w2,-d2+c,h2]] })
-    // Back-right: from (w2, d2-c) to (w2-c, d2)
-    polys.push({ vertices: [[w2-c,d2,-h2],[w2,d2-c,-h2],[w2,d2-c,h2],[w2-c,d2,h2]] })
-    // Back-left: from (-w2+c, d2) to (-w2, d2-c)
-    polys.push({ vertices: [[-w2,d2-c,-h2],[-w2+c,d2,-h2],[-w2+c,d2,h2],[-w2,d2-c,h2]] })
+    // 4 chamfer face strips (vertical, full height), CCW from outside so the
+    // normal points outward — a flipped strip inverts the CSG tree's in/out
+    // classification for everything behind its (infinite) plane, which
+    // silently deletes every pattern-hole lining when a chamfer is active
+    // Front-left: outward normal (-1,-1,0)/√2
+    polys.push({ vertices: [[-w2,-d2+c,-h2],[-w2+c,-d2,-h2],[-w2+c,-d2,h2],[-w2,-d2+c,h2]] })
+    // Front-right: outward normal (1,-1,0)/√2
+    polys.push({ vertices: [[w2-c,-d2,-h2],[w2,-d2+c,-h2],[w2,-d2+c,h2],[w2-c,-d2,h2]] })
+    // Back-right: outward normal (1,1,0)/√2
+    polys.push({ vertices: [[w2,d2-c,-h2],[w2-c,d2,-h2],[w2-c,d2,h2],[w2,d2-c,h2]] })
+    // Back-left: outward normal (-1,1,0)/√2
+    polys.push({ vertices: [[-w2+c,d2,-h2],[-w2,d2-c,-h2],[-w2,d2-c,h2],[-w2+c,d2,h2]] })
   } else {
     // === ORIGINAL OUTER FACES (no chamfer) ===
     // Bottom (N = -Z)
@@ -222,7 +231,7 @@ export function generateBox(params: BoxParams) {
         if (isFirstX && isFirstY) {
           polys.push({ vertices: [[x1,y0,h2],[x1,y1,h2],[x0,y1,h2]] })
         } else if (isLastX && isFirstY) {
-          polys.push({ vertices: [[x0,y0,h2],[x0,y1,h2],[x1,y1,h2]] })
+          polys.push({ vertices: [[x0,y0,h2],[x1,y1,h2],[x0,y1,h2]] })
         } else if (isFirstX && isLastY) {
           polys.push({ vertices: [[x0,y0,h2],[x1,y0,h2],[x1,y1,h2]] })
         } else if (isLastX && isLastY) {
@@ -289,14 +298,22 @@ export function generateBox(params: BoxParams) {
 interface Rect2 { x0: number; x1: number; y0: number; y1: number }
 
 // 2D shape for one hole, centered at the origin. `size` is the across dimension.
-function patternShape2D(pattern: LidPattern, size: number): any | null {
+// `flipped` (triangles only) builds the 180°-rotated shape from exact mirrored
+// coordinates. It must NOT be produced with rotate([0, 0, Math.PI], …):
+// Math.sin(Math.PI) is 1.2e-16, so a rotated prism is microscopically skewed,
+// its CSG cut planes stop lining up with the straight-built geometry, and the
+// T-junction repair on export can no longer pair the resulting vertices —
+// which is exactly the "80 non-manifold edges" corruption slicers reported.
+function patternShape2D(pattern: LidPattern, size: number, flipped = false): any | null {
   const r = size / 2
   switch (pattern) {
     case 'circles': return circle({ radius: r, segments: 20 })
     case 'squares': return rectangle({ size: [size, size] })
     case 'diamonds': return polygon({ points: [[r, 0], [0, r], [-r, 0], [0, -r]] })
     case 'hexagons': return circle({ radius: r, segments: 6 })
-    case 'triangles': return polygon({ points: [[0, r], [-r * 0.866, -r / 2], [r * 0.866, -r / 2]] })
+    case 'triangles': return flipped
+      ? polygon({ points: [[0, -r], [r * 0.866, r / 2], [-r * 0.866, r / 2]] })
+      : polygon({ points: [[0, r], [-r * 0.866, -r / 2], [r * 0.866, -r / 2]] })
     case 'slots': return rectangle({ size: [size * 2, size * 0.45] })
     default: return null
   }
@@ -392,7 +409,7 @@ function zExtrudedPatternHoles(
   const h = zTo - zFrom
   const prism = extrudeLinear({ height: h }, shape)
   const prismAlt = pattern === 'triangles'
-    ? extrudeLinear({ height: h }, rotate([0, 0, Math.PI], shape))
+    ? extrudeLinear({ height: h }, patternShape2D(pattern, size, true))
     : prism
 
   return unionAll(positions.map((p) => translate([p.x, p.y, zFrom], p.alt ? prismAlt : prism)))
@@ -439,7 +456,7 @@ function boxWallHoles(params: BoxParams): any | null {
   const h = wt + 1 // through-thickness, overshooting both faces slightly
   const prism = extrudeLinear({ height: h }, shape)
   const prismAlt = boxPattern === 'triangles'
-    ? extrudeLinear({ height: h }, rotate([0, 0, Math.PI], shape))
+    ? extrudeLinear({ height: h }, patternShape2D(boxPattern, size, true))
     : prism
 
   const solids: any[] = []
@@ -670,9 +687,9 @@ function generateFlatLid(params: BoxParams) {
         } else if (i === nx - 1 && j === 0) {
           polys.push({ vertices: [[xB[nx - 1],yB[0],-wt],[xB[nx - 1],yB[1],-wt],[xB[nx],yB[1],-wt]] })
         } else if (i === 0 && j === ny - 1) {
-          polys.push({ vertices: [[xB[0],yB[ny - 1],-wt],[xB[1],yB[ny - 1],-wt],[xB[1],yB[ny],-wt]] })
+          polys.push({ vertices: [[xB[0],yB[ny - 1],-wt],[xB[1],yB[ny],-wt],[xB[1],yB[ny - 1],-wt]] })
         } else {
-          polys.push({ vertices: [[xB[nx - 1],yB[ny - 1],-wt],[xB[nx],yB[ny - 1],-wt],[xB[nx - 1],yB[ny],-wt]] })
+          polys.push({ vertices: [[xB[nx - 1],yB[ny - 1],-wt],[xB[nx - 1],yB[ny],-wt],[xB[nx],yB[ny - 1],-wt]] })
         }
       } else {
         polys.push({ vertices: [
@@ -695,7 +712,7 @@ function generateFlatLid(params: BoxParams) {
         } else if (i === 0 && j === ny - 1) {
           polys.push({ vertices: [[xB[0],yB[ny - 1],z],[xB[1],yB[ny - 1],z],[xB[1],yB[ny],z]] })
         } else {
-          polys.push({ vertices: [[xB[nx - 1],yB[ny - 1],z],[xB[nx - 1],yB[ny],z],[xB[nx],yB[ny - 1],z]] })
+          polys.push({ vertices: [[xB[nx - 1],yB[ny - 1],z],[xB[nx],yB[ny - 1],z],[xB[nx - 1],yB[ny],z]] })
         }
       } else {
         polys.push({ vertices: [
@@ -737,17 +754,19 @@ function generateFlatLid(params: BoxParams) {
       ]})
     }
 
-    // 4 chamfer face strips (corner diagonal walls)
+    // 4 chamfer face strips (corner diagonal walls), CCW from outside so the
+    // normal points outward — a flipped strip breaks CSG classification (see
+    // the matching comment in generateBox)
     // Corner tops are always wing height (0) since corners are outside the lip
     const ct = 0 // corner top Z
-    // Front-left
-    polys.push({ vertices: [[-w2+c,-d2,-wt],[-w2,-d2+c,-wt],[-w2,-d2+c,ct],[-w2+c,-d2,ct]] })
-    // Front-right
-    polys.push({ vertices: [[w2,-d2+c,-wt],[w2-c,-d2,-wt],[w2-c,-d2,ct],[w2,-d2+c,ct]] })
-    // Back-right
-    polys.push({ vertices: [[w2-c,d2,-wt],[w2,d2-c,-wt],[w2,d2-c,ct],[w2-c,d2,ct]] })
-    // Back-left
-    polys.push({ vertices: [[-w2,d2-c,-wt],[-w2+c,d2,-wt],[-w2+c,d2,ct],[-w2,d2-c,ct]] })
+    // Front-left: outward normal (-1,-1,0)/√2
+    polys.push({ vertices: [[-w2,-d2+c,-wt],[-w2+c,-d2,-wt],[-w2+c,-d2,ct],[-w2,-d2+c,ct]] })
+    // Front-right: outward normal (1,-1,0)/√2
+    polys.push({ vertices: [[w2-c,-d2,-wt],[w2,-d2+c,-wt],[w2,-d2+c,ct],[w2-c,-d2,ct]] })
+    // Back-right: outward normal (1,1,0)/√2
+    polys.push({ vertices: [[w2,d2-c,-wt],[w2-c,d2,-wt],[w2-c,d2,ct],[w2,d2-c,ct]] })
+    // Back-left: outward normal (-1,1,0)/√2
+    polys.push({ vertices: [[-w2+c,d2,-wt],[-w2,d2-c,-wt],[-w2,d2-c,ct],[-w2+c,d2,ct]] })
   } else {
     // Left (X = -w2, N = -X)
     for (let j = 0; j < ny; j++) {
@@ -987,7 +1006,7 @@ function sleeveWallHoles(params: BoxParams): any | null {
   const h = wt + 1 // through-thickness, overshooting both faces slightly
   const prism = extrudeLinear({ height: h }, shape)
   const prismAlt = lidPattern === 'triangles'
-    ? extrudeLinear({ height: h }, rotate([0, 0, Math.PI], shape))
+    ? extrudeLinear({ height: h }, patternShape2D(lidPattern, size, true))
     : prism
 
   const solids: any[] = []
@@ -1140,10 +1159,16 @@ function mergeSolids(geoms: any[]): any {
 
 /**
  * Knuckle mounting arm: cuboid below/behind the barrel, overlapping it.
- * Y ∈ [-R, 0], Z ∈ [-(R+armH), -R] in knuckle-local coords (origin = axis).
+ * Y ∈ [-(R+inset), -inset], Z ∈ [-(R+armH), -R] in knuckle-local coords
+ * (origin = axis). The inset pulls the arm off the barrel's bottom axial
+ * edge — at y=0 the arm's corner would lie exactly on the revolve's 270°
+ * vertex line, fusing two shells along one edge (a 4-face non-manifold edge
+ * slicers reject) — and sinks it into the slab/wall it mounts on, so every
+ * contact is a volume overlap instead of a zero-thickness touch.
  */
+const HINGE_ARM_INSET = 0.3
 function knuckleArm(K: number, R: number, armH: number): any {
-  return translate([0, -R / 2, -(R + armH / 2)], cuboid({ size: [K, R, armH] }))
+  return translate([0, -R / 2 - HINGE_ARM_INSET, -(R + armH / 2)], cuboid({ size: [K, R, armH] }))
 }
 
 /**
