@@ -1,37 +1,154 @@
-import { modifiers } from '@jscad/modeling'
+import { Triangle, validateTriangles } from './meshValidator'
 
-// CSG results (sleeve, text lids, hinge knuckles) contain T-junctions along the
-// edges of merged coplanar faces — slicers report those as open edges. Repair
-// them before export: snap near-identical vertices, insert the missing vertices
-// at T-junctions, and triangulate. Direct-built geometry (plain {polygons}
-// without a transforms matrix, like the box) is already manifold — leave it be,
-// since the repair helpers require a real JSCAD geom3.
-function repairForExport(jscadGeom: any): any {
-  if (!jscadGeom || !jscadGeom.transforms) return jscadGeom
-  try {
-    // Cast: the package's .d.ts mistypes generalize as a namespace, but the
-    // runtime export is the function itself
-    return (modifiers as any).generalize({ snap: true, triangulate: true }, jscadGeom)
-  } catch {
-    return jscadGeom
-  }
+// CSG results (patterned boxes, sleeve, text lids) contain T-junctions along
+// BSP split lines — slicers report those as open/non-manifold edges. Repair
+// them on the exported triangle soup: weld vertices that differ only by
+// floating-point noise, then insert the missing vertices along T-junction
+// edges. Direct-built geometry (plain {polygons} without a transforms matrix,
+// like the pattern-less box) is already manifold — leave it be.
+//
+// This deliberately does NOT use @jscad's modifiers.generalize({snap: true}):
+// its snap runs BEFORE its T-junction pass and quantizes vertices to a coarse
+// epsilon (~0.0006 mm for a box this size), which pushes split vertices on
+// diagonal edges (e.g. the triangles pattern, slope 0.866…) off the edge line
+// so the T-junction pass can no longer match them. The leftover open edges
+// then got fan-capped into the overlapping garbage triangles slicers showed
+// as "80 non-manifold edges". Welding at 1e-6 instead keeps collinearity
+// intact for the T-junction pass, which runs at full precision.
+export function jscadToRepairedTriangles(jscadGeom: any): Triangle[] {
+  const triangles = jscadToTriangles(jscadGeom)
+  if (!jscadGeom || !jscadGeom.transforms) return triangles
+  return fixTjunctions(weldTriangles(triangles))
+}
+
+// The exact triangle soup an STL export writes: repaired per geometry, then
+// concatenated, then boundary-capped. Exposed so the mesh-integrity sweep
+// (scripts/check-stl.ts) validates precisely what users download.
+export function prepareTrianglesForExport(geoms: any[]): Triangle[] {
+  return capBoundaryLoops(geoms.filter(Boolean).flatMap(g => jscadToRepairedTriangles(g)))
 }
 
 // Export STL directly from JSCAD geometry
 export function exportJscadToSTL(jscadGeom: any, filename: string = 'box.stl') {
-  const triangles = capBoundaryLoops(jscadToTriangles(repairForExport(jscadGeom)))
-  const stl = trianglesToSTL(triangles)
-  downloadSTL(stl, filename)
+  exportMultipleJscadToSTL([jscadGeom], filename)
 }
 
 // Export multiple JSCAD geometries into a single STL (triangles are concatenated)
 export function exportMultipleJscadToSTL(geoms: any[], filename: string = 'box.stl') {
-  const triangles = capBoundaryLoops(geoms.flatMap(g => jscadToTriangles(repairForExport(g))))
-  const stl = trianglesToSTL(triangles)
-  downloadSTL(stl, filename)
+  const triangles = prepareTrianglesForExport(geoms)
+  // Same integrity checks the pre-push sweep runs — if repair ever leaves a
+  // broken mesh, warn before handing the user an STL their slicer will reject
+  const report = validateTriangles(triangles)
+  if (!report.ok) {
+    const proceed = confirm(
+      `Mesh integrity check failed for ${filename}:\n· ${report.issues.join('\n· ')}\n\n` +
+      'The STL may not slice cleanly. Export anyway?'
+    )
+    if (!proceed) return
+  }
+  downloadSTL(trianglesToSTL(triangles), filename)
 }
 
 type Vec3 = [number, number, number]
+
+// Quantize vertices so points that BSP splitting computed via different plane
+// sequences (identical up to ~1e-12 noise) become bit-identical and edge keys
+// pair up. 1e-6 mm is far below any printable feature, far above the noise.
+const WELD_Q = 1e-6
+function weldTriangles(triangles: Triangle[]): Triangle[] {
+  const q = (n: number) => Math.round(n / WELD_Q) * WELD_Q
+  const w = (v: Vec3): Vec3 => [q(v[0]), q(v[1]), q(v[2])]
+  const out: Triangle[] = []
+  for (const t of triangles) {
+    const v1 = w(t.v1), v2 = w(t.v2), v3 = w(t.v3)
+    // Drop triangles collapsed by welding (their two edge copies cancel out,
+    // so removal keeps every remaining edge's pairing parity intact)
+    const k1 = v1.join(), k2 = v2.join(), k3 = v3.join()
+    if (k1 === k2 || k2 === k3 || k3 === k1) continue
+    out.push({ v1, v2, v3 })
+  }
+  return out
+}
+
+// Repair T-junctions: wherever an edge is unpaired because the neighbouring
+// face is split into sub-segments (a vertex sits mid-edge), split this
+// triangle's edge at those vertices too. Runs at full precision, so it also
+// handles diagonal edges whose intermediate vertices have irrational
+// coordinates. Iterates because one split can expose the next.
+const TJ_TOL = 1e-4 // max distance of a mid-edge vertex from the edge line (mm)
+function fixTjunctions(triangles: Triangle[]): Triangle[] {
+  const vk = (v: Vec3) => v.join()
+  const ek = (a: string, b: string) => (a < b ? a + '|' + b : b + '|' + a)
+
+  let tris = triangles
+  for (let pass = 0; pass < 8; pass++) {
+    const edgeCount = new Map<string, number>()
+    for (const t of tris) {
+      const ks = [vk(t.v1), vk(t.v2), vk(t.v3)]
+      for (let i = 0; i < 3; i++) {
+        const k = ek(ks[i], ks[(i + 1) % 3])
+        edgeCount.set(k, (edgeCount.get(k) || 0) + 1)
+      }
+    }
+
+    // Candidate split points: endpoints of unpaired edges (the fragmented
+    // side's sub-segment ends are unpaired too, so the mid vertex is here)
+    const candidates: Vec3[] = []
+    const seen = new Set<string>()
+    for (const t of tris) {
+      const vs = [t.v1, t.v2, t.v3]
+      for (let i = 0; i < 3; i++) {
+        const a = vs[i], b = vs[(i + 1) % 3]
+        if (edgeCount.get(ek(vk(a), vk(b))) !== 1) continue
+        for (const v of [a, b]) {
+          const k = vk(v)
+          if (!seen.has(k)) { seen.add(k); candidates.push(v) }
+        }
+      }
+    }
+    if (candidates.length === 0) break
+
+    let changed = false
+    const next: Triangle[] = []
+    for (const t of tris) {
+      const vs = [t.v1, t.v2, t.v3]
+      let replaced = false
+      for (let i = 0; i < 3 && !replaced; i++) {
+        const a = vs[i], b = vs[(i + 1) % 3], opp = vs[(i + 2) % 3]
+        if (edgeCount.get(ek(vk(a), vk(b))) !== 1) continue
+
+        // Vertices lying strictly inside segment a→b, sorted along it
+        const ab: Vec3 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]]
+        const len2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2]
+        const oppKey = vk(opp), aKey = vk(a), bKey = vk(b)
+        const splits: { t: number; v: Vec3 }[] = []
+        for (const c of candidates) {
+          const cKey = vk(c)
+          if (cKey === aKey || cKey === bKey || cKey === oppKey) continue
+          const ac: Vec3 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]]
+          const s = (ac[0] * ab[0] + ac[1] * ab[1] + ac[2] * ab[2]) / len2
+          if (s <= 0 || s >= 1) continue
+          const dx = ac[0] - s * ab[0], dy = ac[1] - s * ab[1], dz = ac[2] - s * ab[2]
+          if (dx * dx + dy * dy + dz * dz > TJ_TOL * TJ_TOL) continue
+          splits.push({ t: s, v: c })
+        }
+        if (splits.length === 0) continue
+
+        splits.sort((p, q) => p.t - q.t)
+        const chain = [a, ...splits.map((s) => s.v), b]
+        for (let j = 0; j < chain.length - 1; j++) {
+          next.push({ v1: chain[j], v2: chain[j + 1], v3: opp })
+        }
+        replaced = true
+        changed = true
+      }
+      if (!replaced) next.push(t)
+    }
+    tris = next
+    if (!changed) break
+  }
+  return tris
+}
 
 // Last line of defence for watertightness: some CSG results keep hairline
 // sliver gaps (closed loops of unpaired edges, ~1 mm) that survive even
@@ -108,12 +225,6 @@ export function jscadVolumeCm3(geoms: any[]): number {
     }
   }
   return Math.abs(sixV) / 6 / 1000 // mm³ → cm³
-}
-
-interface Triangle {
-  v1: [number, number, number]
-  v2: [number, number, number]
-  v3: [number, number, number]
 }
 
 // Apply JSCAD transform matrix to a vertex

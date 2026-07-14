@@ -167,6 +167,18 @@ export function upsertProject(projects: SavedProject[], name: string, params: Bo
 
 // ── Shareable JSON files ──────────────────────────────────────────────────────
 
+function downloadJson(data: unknown, filename: string) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+}
+
 export function exportProjectFile(name: string, params: BoxParams) {
   const data = {
     app: PROJECT_FILE_APP,
@@ -175,16 +187,7 @@ export function exportProjectFile(name: string, params: BoxParams) {
     exportedAt: new Date().toISOString(),
     params,
   }
-  const slug = slugify(name) || 'box-project'
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = `${slug}.json`
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  URL.revokeObjectURL(url)
+  downloadJson(data, `${slugify(name) || 'box-project'}.json`)
 }
 
 // Accepts files exported by exportProjectFile, or a bare params object
@@ -197,4 +200,75 @@ export function parseProjectFile(text: string): { name: string; params: BoxParam
   }
   const name = typeof data.name === 'string' ? data.name : ''
   return { name, params: normalizeParams(raw) }
+}
+
+// Whole saved-project library as one backup file — move all projects to
+// another laptop in a single export/import (or keep the file in a synced
+// folder like iCloud Drive as an offline backup).
+export function exportAllProjectsFile(projects: SavedProject[]) {
+  const data = {
+    app: PROJECT_FILE_APP,
+    version: 1,
+    kind: 'project-library',
+    exportedAt: new Date().toISOString(),
+    projects,
+  }
+  downloadJson(data, `box-projects-${new Date().toISOString().slice(0, 10)}.json`)
+}
+
+export type ProjectImport =
+  | { kind: 'single'; name: string; params: BoxParams }
+  | { kind: 'library'; projects: SavedProject[] }
+
+// Accepts single-project files (exportProjectFile), library backups
+// (exportAllProjectsFile), or a bare params object
+export function parseProjectImport(text: string): ProjectImport {
+  const data = JSON.parse(text)
+  if (data && typeof data === 'object' && Array.isArray(data.projects)) {
+    const projects = (data.projects as unknown[])
+      .filter((p): p is SavedProject => !!p && typeof (p as any).name === 'string' && !!(p as any).params)
+      .map(p => ({
+        name: p.name,
+        savedAt: typeof p.savedAt === 'string' ? p.savedAt : new Date().toISOString(),
+        params: normalizeParams(p.params),
+      }))
+    if (projects.length === 0) throw new Error('Library file contains no projects')
+    return { kind: 'library', projects }
+  }
+  const { name, params } = parseProjectFile(text)
+  return { kind: 'single', name, params }
+}
+
+// ── Share links ───────────────────────────────────────────────────────────────
+// The project is base64url-encoded into the URL *fragment* (#p=…). Fragments
+// never leave the browser — they are not sent to any server, including the
+// GitHub Pages host — so this is as private as a file, but it's just a link
+// you can AirDrop/message to yourself or someone else.
+
+export function buildShareLink(name: string, params: BoxParams): string {
+  const payload = JSON.stringify({ v: 1, name, params })
+  const b64 = btoa(String.fromCharCode(...new TextEncoder().encode(payload)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  return `${location.origin}${location.pathname}#p=${b64}`
+}
+
+// Reads and consumes a share link's fragment on app load; null when absent
+// or malformed. Consuming (clearing the hash) keeps a stale link from
+// re-importing on every reload.
+export function consumeShareLink(): { name: string; params: BoxParams } | null {
+  const match = /^#p=([A-Za-z0-9_-]+)$/.exec(location.hash)
+  if (!match) return null
+  history.replaceState(null, '', location.pathname + location.search)
+  try {
+    const b64 = match[1].replace(/-/g, '+').replace(/_/g, '/')
+    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0))
+    const data = JSON.parse(new TextDecoder().decode(bytes))
+    if (!data?.params || typeof data.params.width !== 'number') return null
+    return {
+      name: typeof data.name === 'string' ? data.name : '',
+      params: normalizeParams(data.params),
+    }
+  } catch {
+    return null
+  }
 }

@@ -30,6 +30,10 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # Second guard behind the pre-push hook: never deploy code that
+      # generates broken (non-manifold) STL exports
+      - run: pnpm run check:stl
+
       - run: pnpm run build
         env:
           BASE_URL: /box-stl-generator/

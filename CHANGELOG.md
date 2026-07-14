@@ -4,7 +4,71 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 with date-based entries since the project has no version releases.
 
+## 2026-07-14
+
+### Added
+- **Mesh-integrity guard rail.** A new validator (`src/utils/meshValidator.ts`)
+  checks exported triangle soups for open edges, non-manifold edges,
+  flipped/duplicate facets, zero-area triangles and inside-out shells. It runs
+  in three places:
+  - `pnpm run check:stl` sweeps 22 representative export configurations
+    (all patterns × chamfer, dividers, text lids, hinges, sleeve) through the
+    exact export pipeline (~0.6 s).
+  - A pre-push git hook (`.githooks/pre-push`, auto-installed via the
+    `prepare` script pointing `core.hooksPath` at `.githooks`) blocks pushes
+    when any configuration exports broken geometry. Bypass with
+    `git push --no-verify`.
+  - CI runs the same sweep before every Pages deploy.
+  The in-app STL export also validates and asks for confirmation before
+  downloading a mesh that failed the checks.
+- **Share links.** "Copy Share Link" encodes the current project into the URL
+  fragment (`#p=…`); opening the link on any device loads the project. The
+  fragment never leaves the browser — nothing is sent to or stored on a
+  server.
+- **Project library backup.** "Export All Projects" writes the whole saved-
+  project library to one JSON file; importing it on another machine merges the
+  projects into the local library (same names are overwritten). Import still
+  accepts single-project files.
+
+### Fixed
+- **Hinged lid exported a non-manifold STL** (caught by the first run of the
+  new sweep). The lid knuckle's mounting arm had its back-bottom corner edge
+  exactly on the barrel revolve's 270° vertex line, fusing two shells along
+  one edge — 4 faces per edge, flagged by slicers. The arm is now inset 0.3 mm
+  toward its mount, so it volume-overlaps the slab/wall and clears the
+  barrel's tangent line (box-side arms get the same overlap for print
+  strength).
+
 ## 2026-07-13
+
+### Fixed
+- **Malformed STL exports for patterned boxes.** Exporting a box with a cutout
+  pattern produced STLs that slicers reported as non-manifold (e.g. "80
+  non-manifold edges" in Bambu Studio) with the pattern missing after repair.
+  Three compounding causes:
+  - The export repair ran `generalize({ snap: true, triangulate: true })`,
+    which snaps vertices to a coarse epsilon (~0.0006 mm) *before* its
+    T-junction pass. Snapping pushed CSG split vertices on diagonal hole
+    edges (worst with the triangles pattern, slope 0.866…) off the edge line,
+    so the T-junctions were never repaired and the leftover open edges got
+    fan-capped into overlapping garbage. The exporter now welds vertices at
+    1e-6 mm and repairs T-junctions itself at full precision, with the
+    boundary-loop capping kept only as a last resort.
+  - The four chamfer corner strips in `generateBox`/`generateFlatLid` (and
+    five chamfered corner triangles on top/bottom faces) were wound backwards.
+    Slicers silently fix flipped facets on plain parts, but a flipped plane
+    inverts the CSG tree's in/out classification, deleting every pattern-hole
+    lining whenever a chamfer was combined with a cutout pattern — the holes
+    exported as sealed membranes.
+  - When the chamfer size equalled the wall thickness, duplicated grid
+    breakpoints emitted zero-area polygons with null planes, poisoning the
+    CSG tree the same way. Breakpoints are now deduplicated.
+  - The alternating (upside-down) triangle prisms are now built from exact
+    mirrored coordinates instead of `rotate(π)`, avoiding 1e-16 skew in
+    their cut planes.
+  All parts × all patterns × chamfer/divider/hinge combinations now export
+  watertight (0 open, 0 non-manifold, 0 flipped edges, holes verified by
+  volume) in an automated mesh-integrity sweep.
 
 ### Added
 - **Box wall and floor cutout patterns.** The Box tab now has the same cutout

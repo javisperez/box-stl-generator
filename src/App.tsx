@@ -11,7 +11,8 @@ import { Button } from './components/ui/button'
 import {
   DEFAULTS, SavedProject, loadCurrentParams, saveCurrentParams, clearCurrentParams,
   loadCurrentProjectName, saveCurrentProjectName,
-  loadProjects, persistProjects, upsertProject, exportProjectFile, parseProjectFile,
+  loadProjects, persistProjects, upsertProject, exportProjectFile, parseProjectImport,
+  exportAllProjectsFile, consumeShareLink,
   AppSettings, loadSettings, saveSettings, slugify,
 } from './utils/projectStorage'
 import { Github, Download, Plus, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react'
@@ -50,10 +51,17 @@ function PartCard({ title, subtitle, volumeCm3, onExport }: {
   )
 }
 
+// A share link (#p=…) opens the app with that project loaded. Consumed once
+// at module load, before React mounts, so StrictMode double-rendering can't
+// read an already-cleared hash.
+const sharedProject = consumeShareLink()
+
 function App() {
-  const [params, setParams] = useState<BoxParams>(loadCurrentParams)
+  const [params, setParams] = useState<BoxParams>(() => sharedProject?.params ?? loadCurrentParams())
   const [savedProjects, setSavedProjects] = useState<SavedProject[]>(loadProjects)
-  const [projectName, setProjectName] = useState<string>(loadCurrentProjectName)
+  const [projectName, setProjectName] = useState<string>(() =>
+    sharedProject ? sharedProject.name : loadCurrentProjectName()
+  )
   const [settings, setSettings] = useState<AppSettings>(loadSettings)
   // Viewer-only: show the lid closed on the box (or the box inside the sleeve).
   // Deliberately not part of BoxParams so it never affects exports or saved projects.
@@ -186,11 +194,24 @@ function App() {
     exportProjectFile(name, params)
   }
 
+  const handleExportAllJson = () => {
+    exportAllProjectsFile(savedProjects)
+  }
+
   const handleImportJson = async (file: File) => {
     try {
-      const { name, params: imported } = parseProjectFile(await file.text())
-      setParams(imported)
-      if (name) setProjectName(name)
+      const imported = parseProjectImport(await file.text())
+      if (imported.kind === 'library') {
+        // Merge into the saved library; same-named imports overwrite
+        let next = savedProjects
+        for (const p of imported.projects) next = upsertProject(next, p.name, p.params)
+        setSavedProjects(next)
+        persistProjects(next)
+        alert(`Imported ${imported.projects.length} project${imported.projects.length === 1 ? '' : 's'} into your library.`)
+      } else {
+        setParams(imported.params)
+        if (imported.name) setProjectName(imported.name)
+      }
     } catch {
       alert('Could not import this file — it does not look like a valid project JSON.')
     }
@@ -373,6 +394,7 @@ function App() {
             onLoadProject={handleLoadProject}
             onDeleteProject={handleDeleteProject}
             onExportJson={handleExportJson}
+            onExportAllJson={handleExportAllJson}
             onImportJson={handleImportJson}
           />
         </div>

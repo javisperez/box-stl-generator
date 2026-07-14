@@ -2,9 +2,9 @@ import { useRef, useState } from 'react'
 import { Label } from './ui/label'
 import { Slider } from './ui/slider'
 import { Button } from './ui/button'
-import { Save, RotateCcw, ChevronDown, Trash2, FileDown, FileUp, AlertTriangle, CheckCircle2 } from 'lucide-react'
+import { Save, RotateCcw, ChevronDown, Trash2, FileDown, FileUp, AlertTriangle, CheckCircle2, Link2, Check, Archive } from 'lucide-react'
 import { BoxParams, sleeveOuterDims, LID_PATTERNS } from '@/utils/boxGenerator'
-import { SavedProject, AppSettings } from '@/utils/projectStorage'
+import { SavedProject, AppSettings, buildShareLink } from '@/utils/projectStorage'
 
 interface ControlPanelProps {
   params: BoxParams
@@ -21,6 +21,7 @@ interface ControlPanelProps {
   onLoadProject: (name: string) => void
   onDeleteProject: (name: string) => void
   onExportJson: (name: string) => void
+  onExportAllJson: () => void
   onImportJson: (file: File) => void
 }
 
@@ -47,10 +48,21 @@ function evenPositions(count: number): number[] {
 export function ControlPanel({
   params, onParamsChange, previewInPlace, onPreviewInPlaceChange,
   settings, onSettingsChange, projectName, onProjectNameChange, onReset,
-  savedProjects, onSaveProject, onLoadProject, onDeleteProject, onExportJson, onImportJson,
+  savedProjects, onSaveProject, onLoadProject, onDeleteProject, onExportJson, onExportAllJson, onImportJson,
 }: ControlPanelProps) {
   const [activeTab, setActiveTab] = useState<TabType>('generator')
   const importInputRef = useRef<HTMLInputElement>(null)
+  const [linkCopied, setLinkCopied] = useState(false)
+
+  const handleCopyShareLink = async () => {
+    try {
+      await navigator.clipboard.writeText(buildShareLink(projectName.trim(), params))
+      setLinkCopied(true)
+      setTimeout(() => setLinkCopied(false), 2000)
+    } catch {
+      alert('Could not copy the link — your browser blocked clipboard access.')
+    }
+  }
   const [volume, setVolume] = useState(1000) // cubic mm
   const [compartmentCount, setCompartmentCount] = useState(4)
   const [itemWidth, setItemWidth] = useState(50) // mm
@@ -1129,8 +1141,8 @@ export function ControlPanel({
                 onClick={() => setShareExpanded(!shareExpanded)}
               >
                 <div>
-                  <h3 className="text-lg font-semibold">Share</h3>
-                  <p className="text-sm text-muted-foreground">Export or import projects as JSON files</p>
+                  <h3 className="text-lg font-semibold">Share &amp; Backup</h3>
+                  <p className="text-sm text-muted-foreground">Move projects between devices — links or JSON files</p>
                 </div>
                 <ChevronDown
                   className={`h-5 w-5 transition-transform ${
@@ -1140,38 +1152,62 @@ export function ControlPanel({
               </button>
 
               {shareExpanded && (
-                <div className="p-4 border-t space-y-2">
-                  <p className="text-xs text-muted-foreground">
-                    Export the current settings as a JSON file that anyone can import to recreate this exact project.
-                  </p>
-                  <div className="flex gap-2">
-                    <Button
-                      className="flex-1"
-                      variant="outline"
-                      onClick={() => onExportJson(projectName.trim() || 'box-project')}
-                    >
-                      <FileDown className="mr-2 h-4 w-4" />
-                      Export JSON
+                <div className="p-4 border-t space-y-4">
+                  <div className="space-y-2">
+                    <p className="text-xs text-muted-foreground">
+                      Copy a link that opens this exact project on any device. The project data lives
+                      in the link itself (after the #) and is never sent to any server.
+                    </p>
+                    <Button className="w-full" variant="outline" onClick={handleCopyShareLink}>
+                      {linkCopied ? <Check className="mr-2 h-4 w-4" /> : <Link2 className="mr-2 h-4 w-4" />}
+                      {linkCopied ? 'Link copied!' : 'Copy Share Link'}
                     </Button>
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-xs text-muted-foreground">
+                      Export the current settings as a JSON file, or your whole project library as a
+                      single backup file. Import accepts both; a library import merges into your
+                      saved projects (same names are overwritten).
+                    </p>
+                    <div className="flex gap-2">
+                      <Button
+                        className="flex-1"
+                        variant="outline"
+                        onClick={() => onExportJson(projectName.trim() || 'box-project')}
+                      >
+                        <FileDown className="mr-2 h-4 w-4" />
+                        Export JSON
+                      </Button>
+                      <Button
+                        className="flex-1"
+                        variant="outline"
+                        onClick={() => importInputRef.current?.click()}
+                      >
+                        <FileUp className="mr-2 h-4 w-4" />
+                        Import JSON
+                      </Button>
+                      <input
+                        ref={importInputRef}
+                        type="file"
+                        accept=".json,application/json"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0]
+                          if (file) onImportJson(file)
+                          e.target.value = ''
+                        }}
+                      />
+                    </div>
                     <Button
-                      className="flex-1"
+                      className="w-full"
                       variant="outline"
-                      onClick={() => importInputRef.current?.click()}
+                      disabled={savedProjects.length === 0}
+                      onClick={onExportAllJson}
                     >
-                      <FileUp className="mr-2 h-4 w-4" />
-                      Import JSON
+                      <Archive className="mr-2 h-4 w-4" />
+                      Export All Projects ({savedProjects.length})
                     </Button>
-                    <input
-                      ref={importInputRef}
-                      type="file"
-                      accept=".json,application/json"
-                      className="hidden"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0]
-                        if (file) onImportJson(file)
-                        e.target.value = ''
-                      }}
-                    />
                   </div>
                 </div>
               )}
