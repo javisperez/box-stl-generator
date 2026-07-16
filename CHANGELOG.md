@@ -4,9 +4,36 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 with date-based entries since the project has no version releases.
 
+## 2026-07-16
+
+### Added
+- **mm readouts for divider positions.** Each X/Z divider slider now shows its
+  position in millimetres next to the percentage (distance from the inner wall
+  face to the divider's centreline), and a summary under each division group
+  lists the resulting clear compartment widths/depths, noting that the divider
+  thickness comes out of the compartments.
+- **More help text across the control panel.** The Box tab now states that
+  width/depth/height are outer dimensions and shows the computed usable
+  interior; wall thickness, chamfer and division sliders explain what they
+  affect; the Generator calculators clarify whether their inputs are interior
+  or outer sizes (Division Designer's preview now breaks total depth into
+  compartments + walls); and the Lid tab explains lip height and the hinge
+  barrel diameter.
+
 ## 2026-07-14
 
 ### Added
+- **Finger slots.** New "Finger Slots" section in the Box tab cuts aligned
+  notches down from the top edge so flat contents (cards, coins, tokens) can
+  be pinched out of each compartment. "X Walls" notches the left/right outer
+  walls and every X divider; "Z Walls" notches the front/back walls and every
+  Z divider ("Both" does both). Width, depth and position along the wall are
+  adjustable; the notch is confined to the inner cavity span (clear of
+  corners and chamfers), stops just above the floor, and the back wall stays
+  solid when a hinge is enabled. Wall cutout patterns automatically keep
+  their holes clear of the notches, and the `check:stl` sweep gained five
+  finger-slot configurations (dividers, chamfer, patterns, max-depth
+  off-centre extremes, hinge) — all pass the edge/face integrity checks.
 - **Mesh-integrity guard rail.** A new validator (`src/utils/meshValidator.ts`)
   checks exported triangle soups for open edges, non-manifold edges,
   flipped/duplicate facets, zero-area triangles and inside-out shells. It runs

@@ -205,6 +205,28 @@ export function ControlPanel({
   const showTolerance = isSleeveStyle || !params.includeHinge
   const toleranceValue = isSleeveStyle ? params.sleeveTolerance : params.lidTolerance
 
+  // ── Interior dimensions & compartment maths (help-text readouts) ───────────
+  // Box dims are OUTER; interior loses two walls in X/Z and only the floor in Y
+  const innerW = Math.max(0, params.width - 2 * params.wallThickness)
+  const innerD = Math.max(0, params.depth - 2 * params.wallThickness)
+  const innerH = Math.max(0, params.height - params.wallThickness)
+  const divT = Math.min(params.divisionThickness, params.wallThickness)
+  const fmt = (n: number) => String(Math.round(n * 10) / 10)
+
+  // Clear interior span of each compartment along one axis: divider thickness
+  // straddles its centreline, so it comes out of the neighbouring compartments
+  const compartmentSpans = (positions: number[], inner: number): number[] => {
+    const centers = [...positions].sort((a, b) => a - b).map(p => (p / 100) * inner)
+    const spans: number[] = []
+    let prev = 0
+    for (const c of centers) {
+      spans.push(Math.max(0, c - divT / 2 - prev))
+      prev = c + divT / 2
+    }
+    spans.push(Math.max(0, inner - prev))
+    return spans
+  }
+
   return (
     <div className="px-5 pb-5 space-y-5">
       {/* Tabs — sticky within the sidebar's scroll container */}
@@ -267,6 +289,12 @@ export function ControlPanel({
                       onValueChange={setVolume}
                     />
                   </div>
+
+                  <p className="text-xs text-muted-foreground">
+                    Sets the box's outer width, depth and height to roughly match this volume, with
+                    slightly-wider-than-tall proportions. The usable interior will be a bit smaller
+                    once walls are subtracted — fine-tune on the Box tab.
+                  </p>
 
                   <Button onClick={generateFromVolume} className="w-full">
                     Generate from Volume
@@ -343,6 +371,12 @@ export function ControlPanel({
                     />
                   </div>
 
+                  <p className="text-xs text-muted-foreground">
+                    Item sizes are the clear interior space each compartment needs — wall and
+                    divider thickness is added on top automatically, so the generated box is
+                    larger than the items themselves.
+                  </p>
+
                   <Button onClick={generateFromCompartments} className="w-full">
                     Generate with Compartments
                   </Button>
@@ -379,7 +413,9 @@ export function ControlPanel({
                       className="w-full px-3 py-2 text-sm rounded-md border bg-background"
                     />
                     <p className="text-xs text-muted-foreground">
-                      Enter comma-separated depths (e.g., 51, 48, 30)
+                      Enter comma-separated depths (e.g., 51, 48, 30). Each number is the clear
+                      interior size of one compartment, front to back — walls are added between
+                      and around them, so the box's total depth ends up larger.
                     </p>
                   </div>
 
@@ -395,6 +431,9 @@ export function ControlPanel({
                       value={divisionWallThickness}
                       onValueChange={setDivisionWallThickness}
                     />
+                    <p className="text-xs text-muted-foreground">
+                      Used for both the outer walls and the dividers when generating.
+                    </p>
                   </div>
 
                   {/* Preview calculation */}
@@ -411,9 +450,12 @@ export function ControlPanel({
                         return (
                           <div className="p-3 bg-muted rounded text-sm">
                             <p><strong>Preview:</strong></p>
-                            <p>Divisions: {divisions.join('mm, ')}mm</p>
-                            <p>Total depth: {Math.round(totalDepth)}mm</p>
-                            <p>({divisions.length} compartments)</p>
+                            <p>Compartments (inside): {divisions.join('mm, ')}mm</p>
+                            <p>
+                              Total outer depth: {Math.round(totalDepth)}mm
+                              {' '}({divisions.length} compartments + {divisions.length + 1} walls
+                              of {divisionWallThickness}mm)
+                            </p>
                           </div>
                         )
                       }
@@ -474,6 +516,18 @@ export function ControlPanel({
               />
             </div>
 
+            <div className="p-3 bg-muted rounded text-xs text-muted-foreground space-y-1">
+              <p>
+                Width, depth and height are <strong>outer</strong> dimensions — the walls are
+                included in them, not added on top.
+              </p>
+              <p>
+                Usable interior: <strong>{fmt(innerW)} × {fmt(innerD)} × {fmt(innerH)} mm</strong>{' '}
+                (W × D × H). The sides lose two {params.wallThickness} mm walls; the height only
+                loses the floor, since the top is open.
+              </p>
+            </div>
+
             <div className="space-y-2">
               <div className="flex justify-between items-center">
                 <Label>Wall Thickness (mm)</Label>
@@ -486,6 +540,10 @@ export function ControlPanel({
                 value={params.wallThickness}
                 onValueChange={(value) => updateParam('wallThickness', value)}
               />
+              <p className="text-xs text-muted-foreground">
+                Thickness of the four outer walls and the floor. Increasing it keeps the outer size
+                the same and shrinks the interior.
+              </p>
             </div>
 
             <div className="space-y-2">
@@ -517,6 +575,10 @@ export function ControlPanel({
                 value={params.chamferSize}
                 onValueChange={(value) => updateParam('chamferSize', value)}
               />
+              <p className="text-xs text-muted-foreground">
+                45° bevel on the four outer vertical edges. Cosmetic only — the interior is
+                unaffected. 0 keeps square corners.
+              </p>
             </div>
 
             <div className="space-y-2">
@@ -531,11 +593,18 @@ export function ControlPanel({
                 value={params.divisionsX.length}
                 onValueChange={(value) => setDivisionCount('divisionsX', value)}
               />
+              <p className="text-xs text-muted-foreground">
+                Vertical walls that split the interior along the width. Each position is a % across
+                the {fmt(innerW)} mm interior, measured from the inside of the left wall to the
+                divider's centreline.
+              </p>
               {params.divisionsX.map((pos, i) => (
                 <div key={i} className="space-y-1 pl-4">
                   <div className="flex justify-between items-center">
                     <Label className="text-xs">X Divider {i + 1} (%)</Label>
-                    <span className="text-xs text-muted-foreground">{pos}%</span>
+                    <span className="text-xs text-muted-foreground">
+                      {pos}% · {fmt((pos / 100) * innerW)} mm
+                    </span>
                   </div>
                   <Slider
                     min={1}
@@ -546,6 +615,12 @@ export function ControlPanel({
                   />
                 </div>
               ))}
+              {params.divisionsX.length > 0 && (
+                <p className="text-xs text-muted-foreground pl-4">
+                  Compartment widths (clear inside): {compartmentSpans(params.divisionsX, innerW).map(fmt).join(' · ')} mm.
+                  The {divT} mm divider thickness comes out of the compartments.
+                </p>
+              )}
             </div>
 
             <div className="space-y-2">
@@ -560,11 +635,18 @@ export function ControlPanel({
                 value={params.divisionsZ.length}
                 onValueChange={(value) => setDivisionCount('divisionsZ', value)}
               />
+              <p className="text-xs text-muted-foreground">
+                Walls that split the interior along the depth. Each position is a % across the
+                {' '}{fmt(innerD)} mm interior, measured from the inside of the front wall to the
+                divider's centreline.
+              </p>
               {params.divisionsZ.map((pos, i) => (
                 <div key={i} className="space-y-1 pl-4">
                   <div className="flex justify-between items-center">
                     <Label className="text-xs">Z Divider {i + 1} (%)</Label>
-                    <span className="text-xs text-muted-foreground">{pos}%</span>
+                    <span className="text-xs text-muted-foreground">
+                      {pos}% · {fmt((pos / 100) * innerD)} mm
+                    </span>
                   </div>
                   <Slider
                     min={1}
@@ -575,6 +657,88 @@ export function ControlPanel({
                   />
                 </div>
               ))}
+              {params.divisionsZ.length > 0 && (
+                <p className="text-xs text-muted-foreground pl-4">
+                  Compartment depths (clear inside): {compartmentSpans(params.divisionsZ, innerD).map(fmt).join(' · ')} mm.
+                  The {divT} mm divider thickness comes out of the compartments.
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label>Finger Slots</Label>
+              <div className="grid grid-cols-4 gap-2">
+                {([
+                  { value: 'none', label: 'None' },
+                  { value: 'x', label: 'X Walls' },
+                  { value: 'z', label: 'Z Walls' },
+                  { value: 'both', label: 'Both' },
+                ] as const).map(({ value, label }) => (
+                  <button
+                    key={value}
+                    className={`px-2 py-1.5 text-sm rounded-md border ${params.fingerSlotAxes === value ? 'bg-primary text-primary-foreground' : 'bg-background'}`}
+                    onClick={() => updateParam('fingerSlotAxes', value)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Aligned notches cut down from the top edge so you can pinch cards or other flat
+                items out of each compartment. X Walls notches the left/right walls and every X
+                divider; Z Walls notches the front/back walls and every Z divider.
+                {params.includeHinge && ' With a hinge, the back wall stays solid.'}
+              </p>
+
+              {params.fingerSlotAxes !== 'none' && (
+                <div className="space-y-4 pt-1">
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-center">
+                      <Label>Slot Width (mm)</Label>
+                      <span className="text-sm text-muted-foreground">{params.fingerSlotWidth}</span>
+                    </div>
+                    <Slider
+                      min={5}
+                      max={60}
+                      step={1}
+                      value={params.fingerSlotWidth}
+                      onValueChange={(value) => updateParam('fingerSlotWidth', value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-center">
+                      <Label>Slot Depth (mm)</Label>
+                      <span className="text-sm text-muted-foreground">{params.fingerSlotDepth}</span>
+                    </div>
+                    <Slider
+                      min={2}
+                      max={Math.max(2, params.height - params.wallThickness - 0.5)}
+                      step={0.5}
+                      value={params.fingerSlotDepth}
+                      onValueChange={(value) => updateParam('fingerSlotDepth', value)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      How far down from the top edge the notch reaches. It always stops just above the floor.
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-center">
+                      <Label>Slot Position (%)</Label>
+                      <span className="text-sm text-muted-foreground">{params.fingerSlotPosition}</span>
+                    </div>
+                    <Slider
+                      min={0}
+                      max={100}
+                      step={1}
+                      value={params.fingerSlotPosition}
+                      onValueChange={(value) => updateParam('fingerSlotPosition', value)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Where the notch sits along the wall — 50% is centred.
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="space-y-2">
@@ -783,6 +947,10 @@ export function ControlPanel({
                       value={params.lidHeight}
                       onValueChange={(value) => updateParam('lidHeight', value)}
                     />
+                    <p className="text-xs text-muted-foreground">
+                      How far the lid's inner lip reaches down into the box. A taller lip grips
+                      better, but it hangs into the interior — leave room above your contents.
+                    </p>
                   </div>
                 )}
 
@@ -828,6 +996,9 @@ export function ControlPanel({
                             value={params.hingeDiameter}
                             onValueChange={(value) => updateParam('hingeDiameter', value)}
                           />
+                          <p className="text-xs text-muted-foreground">
+                            Outer diameter of the hinge knuckles on the box's back edge.
+                          </p>
                         </div>
 
                         <div className="space-y-2">

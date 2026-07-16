@@ -10,6 +10,8 @@ const { measureBoundingBox } = measurements
 
 export type LidPattern = 'none' | 'circles' | 'squares' | 'diamonds' | 'hexagons' | 'triangles' | 'slots'
 
+export type FingerSlotAxes = 'none' | 'x' | 'z' | 'both'
+
 export const LID_PATTERNS: { value: LidPattern; label: string }[] = [
   { value: 'none', label: 'None' },
   { value: 'circles', label: 'Circles' },
@@ -42,6 +44,10 @@ export interface BoxParams {
   boxPattern: LidPattern       // cutout pattern through the box's 4 outer side walls
   boxPatternSize: number       // feature size across, in mm
   boxPatternSpacing: number    // gap between features, in mm
+  fingerSlotAxes: FingerSlotAxes // finger-access notches cut down from the top edge
+  fingerSlotWidth: number      // notch width along the wall, in mm
+  fingerSlotDepth: number      // how far down from the top edge, in mm
+  fingerSlotPosition: number   // notch centre as % along the wall (50 = centred)
   chamferSize: number        // 45° chamfer on outer vertical edges (0 = none)
   includeHinge: boolean
   hingeCount: number         // number of hinges along the back edge (1–3)
@@ -280,13 +286,93 @@ export function generateBox(params: BoxParams) {
   }
 
   let box: any = { polygons: polys }
+  const holeSolids: any[] = []
   if (params.boxPattern !== 'none') {
     const wallHoles = boxWallHoles(params)
     const floorHoles = boxFloorHoles(params)
-    const holes = wallHoles && floorHoles ? union(wallHoles, floorHoles) : wallHoles || floorHoles
-    if (holes) box = subtract(asGeom3(box), holes)
+    if (wallHoles) holeSolids.push(wallHoles)
+    if (floorHoles) holeSolids.push(floorHoles)
   }
+  const fingerSlots = fingerSlotCutouts(params)
+  if (fingerSlots) holeSolids.push(fingerSlots)
+  const holes = unionAll(holeSolids)
+  if (holes) box = subtract(asGeom3(box), holes)
   return box
+}
+
+// ── Finger slots ──────────────────────────────────────────────────────────────
+// Rectangular notches cut down from the top edge so fingers can pinch flat
+// contents (cards, coins, tokens) out of a compartment. The 'x' axis notches
+// every wall perpendicular to X — the left/right outer walls and each X
+// divider — all at the same position along the depth, forming an aligned
+// finger channel across the whole box; 'z' does the same for the front/back
+// walls and Z dividers along the width.
+
+// Layout for one axis's slots: centre along the wall, width, and bottom Z.
+// Shared by the cutter and the wall-pattern exclusion rects so pattern holes
+// never get sliced open at a notch border.
+interface FingerSlotLayout { c: number; w: number; zBot: number }
+
+function fingerSlotLayout(params: BoxParams, axis: 'x' | 'z'): FingerSlotLayout | null {
+  const { width, depth, height, wallThickness: wt, fingerSlotAxes } = params
+  if (fingerSlotAxes !== axis && fingerSlotAxes !== 'both') return null
+
+  const h2 = height / 2
+  // Slot span along the wall, confined to the inner cavity span so notches
+  // never bite into the perpendicular walls, corners, or chamfers. The small
+  // margin also keeps cut planes clear of the chamfer faces when c == wt.
+  const margin = 0.5
+  const innerSpan = (axis === 'x' ? depth : width) - 2 * wt
+  const half = innerSpan / 2 - margin
+  if (half <= 1) return null
+
+  const w = Math.min(Math.max(params.fingerSlotWidth, 2), half * 2)
+  const pct = Math.min(Math.max(params.fingerSlotPosition, 0), 100)
+  const c = Math.min(Math.max(-half + (pct / 100) * (2 * half), -half + w / 2), half - w / 2)
+
+  // Depth stops 0.5 mm above the floor so the slot's bottom cut plane never
+  // coincides with the inner-floor plane (coplanar CSG faces corrupt shells)
+  const d = Math.min(Math.max(params.fingerSlotDepth, 2), height - wt - 0.5)
+  return { c, w, zBot: h2 - d }
+}
+
+function fingerSlotCutouts(params: BoxParams): any | null {
+  const { width, depth, height, wallThickness: wt, divisionsX, divisionsZ, divisionThickness, includeHinge } = params
+  const w2 = width / 2, d2 = depth / 2, h2 = height / 2
+  const dt = clampDivisionThickness(divisionThickness, wt)
+  const iw = width - 2 * wt, id = depth - 2 * wt
+
+  const zTop = h2 + 0.5 // overshoot above the rim — no coplanar top faces
+  const solids: any[] = []
+  // One prism per wall, just thicker than the wall it notches (±0.5 overshoot
+  // into air on both sides) so cut planes never coincide with wall faces
+  const prism = (cx: number, cy: number, sx: number, sy: number, zBot: number) =>
+    translate([cx, cy, (zTop + zBot) / 2], cuboid({ size: [sx, sy, zTop - zBot] }))
+
+  const xSlot = fingerSlotLayout(params, 'x')
+  if (xSlot) {
+    const { c, w, zBot } = xSlot
+    solids.push(prism(-w2 + wt / 2, c, wt + 1, w, zBot)) // left outer wall
+    solids.push(prism(w2 - wt / 2, c, wt + 1, w, zBot))  // right outer wall
+    for (const pct of divisionsX) {
+      const x = -iw / 2 + (pct / 100) * iw
+      solids.push(prism(x, c, dt + 1, w, zBot))
+    }
+  }
+
+  const zSlot = fingerSlotLayout(params, 'z')
+  if (zSlot) {
+    const { c, w, zBot } = zSlot
+    solids.push(prism(c, -d2 + wt / 2, w, wt + 1, zBot)) // front outer wall
+    // The back wall carries the hinge knuckle arms — keep it solid then
+    if (!includeHinge) solids.push(prism(c, d2 - wt / 2, w, wt + 1, zBot))
+    for (const pct of divisionsZ) {
+      const y = -id / 2 + (pct / 100) * id
+      solids.push(prism(c, y, w, dt + 1, zBot))
+    }
+  }
+
+  return unionAll(solids)
 }
 
 // ── Cutout patterns ───────────────────────────────────────────────────────────
@@ -461,9 +547,16 @@ function boxWallHoles(params: BoxParams): any | null {
 
   const solids: any[] = []
 
+  // Keep pattern holes clear of the finger slots — a hole straddling a notch
+  // border would be sliced open into a stress-raising partial cut
+  const slotRect = (s: FingerSlotLayout | null): Rect2[] =>
+    s ? [{ x0: s.c - s.w / 2 - 1.5, x1: s.c + s.w / 2 + 1.5, y0: s.zBot - 1.5, y1: h2 + 1 }] : []
+  const fbExclusions = slotRect(fingerSlotLayout(params, 'z'))
+  const lrExclusions = slotRect(fingerSlotLayout(params, 'x'))
+
   // Front & back walls: u = X, v = Z, extrusion punches through Y
   const fbRegion: Rect2 = { x0: -w2 + marginH, x1: w2 - marginH, y0: zBot, y1: zTop }
-  const fbPositions = patternGrid(boxPattern, size, spacing, fbRegion, [])
+  const fbPositions = patternGrid(boxPattern, size, spacing, fbRegion, fbExclusions)
   if (fbPositions) {
     // rotate 90° about X: (x,y,z) -> (x, -z, y) — z (extrusion) becomes Y, y (shape) stays as Z
     const fPrism = rotate([Math.PI / 2, 0, 0], prism)
@@ -483,7 +576,7 @@ function boxWallHoles(params: BoxParams): any | null {
 
   // Left & right walls: u = Y, v = Z, extrusion punches through X
   const lrRegion: Rect2 = { x0: -d2 + marginH, x1: d2 - marginH, y0: zBot, y1: zTop }
-  const lrPositions = patternGrid(boxPattern, size, spacing, lrRegion, [])
+  const lrPositions = patternGrid(boxPattern, size, spacing, lrRegion, lrExclusions)
   if (lrPositions) {
     // compound rotate: (x,y,z) -> (z,x,y) — z (extrusion) becomes X, x/y (shape) become Y/Z
     const sPrism = rotate([0, Math.PI / 2, 0], rotate([0, 0, Math.PI / 2], prism))
