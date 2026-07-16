@@ -22,6 +22,10 @@ export const DEFAULTS: BoxParams = {
   boxPattern: 'none' as const,
   boxPatternSize: 8,
   boxPatternSpacing: 4,
+  fingerSlotAxes: 'none' as const,
+  fingerSlotWidth: 15,
+  fingerSlotDepth: 15,
+  fingerSlotPosition: 50,
   chamferSize: 0,
   includeHinge: false,
   hingeCount: 1,
@@ -94,6 +98,10 @@ export function normalizeParams(raw: unknown): BoxParams {
   if (!LID_PATTERNS.some(o => o.value === p.boxPattern)) p.boxPattern = 'none'
   p.boxPatternSize = Math.min(Math.max(Number(p.boxPatternSize) || 8, 2), 30)
   p.boxPatternSpacing = Math.min(Math.max(Number(p.boxPatternSpacing) || 4, 1.5), 20)
+  if (!['none', 'x', 'z', 'both'].includes(p.fingerSlotAxes)) p.fingerSlotAxes = 'none'
+  p.fingerSlotWidth = Math.min(Math.max(Number(p.fingerSlotWidth) || 15, 2), 100)
+  p.fingerSlotDepth = Math.min(Math.max(Number(p.fingerSlotDepth) || 15, 2), 200)
+  p.fingerSlotPosition = Math.min(Math.max(Number(p.fingerSlotPosition) || 50, 0), 100)
   if (!Array.isArray(p.divisionsX)) p.divisionsX = []
   if (!Array.isArray(p.divisionsZ)) p.divisionsZ = []
   return p

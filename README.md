@@ -9,6 +9,7 @@ A web-based parametric box generator for 3D printing. Design custom boxes with c
 - **Real-time 3D preview** — the box updates live as you adjust parameters; preview the lid closed on the box (or the box inside its sleeve) before printing
 - **Parametric box** — width/depth/height (10–200 mm), wall thickness, 45° chamfers on the outer vertical edges
 - **Compartments** — up to 10 dividers each along width and depth, with adjustable positions and divider thickness
+- **Finger slots** — aligned notches cut down from the top edge of the walls and dividers so cards and other flat items can be pinched out, with adjustable width, depth, and position
 - **Three lid styles**
   - **Lid** — cap with a lip that hangs into the box, with configurable lip height and printer-fit tolerance
   - **Drawer sleeve** — open-front cover the box slides into, with optional finger notches
@@ -55,6 +56,8 @@ Shortcuts that configure the box for you:
 ### Box
 
 Dimensions (10–200 mm per axis), wall thickness (1–10 mm), chamfer size, and X/Z dividers — set the count, then drag each divider's position (1–99% of the inner space). Divider thickness is adjustable and clamped so it never exceeds the outer wall.
+
+**Finger Slots** cut aligned notches down from the top edge so you can pinch flat contents (cards, coins) out of each compartment: **X Walls** notches the left/right walls and every X divider, **Z Walls** the front/back walls and every Z divider. Width, depth, and position along the wall are adjustable; the notch always stays clear of corners, chamfers, and the floor, and the back wall stays solid when a hinge is enabled.
 
 ### Lid
 

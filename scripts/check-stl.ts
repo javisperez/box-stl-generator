@@ -72,6 +72,37 @@ const checks: Check[] = [
     build: () => [generateBox({ ...base, boxPattern: pattern, chamferSize: 1.5 })],
   })),
   {
+    name: 'box · finger slots x + dividers',
+    build: () => [generateBox({ ...base, divisionsX: [33, 66], fingerSlotAxes: 'x' })],
+  },
+  {
+    name: 'box · finger slots both + dividers + chamfer',
+    build: () => [generateBox({
+      ...base, divisionsX: [25, 50, 75], divisionsZ: [40], chamferSize: 1.5,
+      fingerSlotAxes: 'both', fingerSlotWidth: 12, fingerSlotDepth: 20, fingerSlotPosition: 30,
+    })],
+  },
+  {
+    name: 'box · finger slots + pattern hexagons',
+    build: () => [generateBox({
+      ...base, divisionsX: [50], boxPattern: 'hexagons', fingerSlotAxes: 'both',
+    })],
+  },
+  {
+    name: 'box · finger slots max depth + off-centre',
+    build: () => [generateBox({
+      ...base, divisionsZ: [50], fingerSlotAxes: 'both',
+      fingerSlotWidth: 200, fingerSlotDepth: 200, fingerSlotPosition: 100,
+    })],
+  },
+  {
+    name: 'box · finger slots z + hinge (back wall solid)',
+    build: () => {
+      const p = { ...base, includeLid: true, includeHinge: true, fingerSlotAxes: 'z' as const }
+      return [generateBox(p), generateBoxHingeKnuckles(p)]
+    },
+  },
+  {
     name: 'lid · plain',
     build: () => [generateLid({ ...base, includeLid: true })],
   },
