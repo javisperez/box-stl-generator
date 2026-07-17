@@ -4,6 +4,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 with date-based entries since the project has no version releases.
 
+## 2026-07-17
+
+### Fixed
+- **Finger slots no longer collide with crossing dividers.** With divisions in
+  both X and Z, the notches used to sit at one global position per axis, so
+  the aligned channel carved chunks out of perpendicular dividers and their
+  junctions. Each wall is now split into open spans at every crossing divider
+  and each span gets its own notch, kept 0.5 mm clear of divider faces,
+  corners and junctions. The Slot Position % applies within each span
+  (50% = centred per compartment), and slot width clamps to what fits in the
+  narrowest span.
+
+### Added
+- **Divider notches are optional.** A new "Notch divider walls too" checkbox
+  in the Finger Slots section (shown when slots touch an axis that has
+  dividers, on by default) lets you keep divider walls solid and notch only
+  the outer walls. Older saved projects keep the previous behaviour.
+- Two `check:stl` sweep configurations covering the X+Z divider grid with
+  per-span slots, and the outer-walls-only toggle — all 29 pass.
+
 ## 2026-07-16
 
 ### Added

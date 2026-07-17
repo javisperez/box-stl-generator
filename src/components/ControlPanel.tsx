@@ -684,14 +684,28 @@ export function ControlPanel({
                 ))}
               </div>
               <p className="text-xs text-muted-foreground">
-                Aligned notches cut down from the top edge so you can pinch cards or other flat
+                Notches cut down from the top edge so you can pinch cards or other flat
                 items out of each compartment. X Walls notches the left/right walls and every X
-                divider; Z Walls notches the front/back walls and every Z divider.
+                divider; Z Walls notches the front/back walls and every Z divider. Where a
+                crossing divider splits a wall, each open span gets its own notch, kept clear
+                of corners and divider junctions.
                 {params.includeHinge && ' With a hinge, the back wall stays solid.'}
               </p>
 
               {params.fingerSlotAxes !== 'none' && (
                 <div className="space-y-4 pt-1">
+                  {(((params.fingerSlotAxes === 'x' || params.fingerSlotAxes === 'both') && params.divisionsX.length > 0) ||
+                    ((params.fingerSlotAxes === 'z' || params.fingerSlotAxes === 'both') && params.divisionsZ.length > 0)) && (
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={params.fingerSlotDividers}
+                        onChange={(e) => updateParam('fingerSlotDividers', e.target.checked)}
+                        className="h-4 w-4 rounded border-gray-300"
+                      />
+                      <span className="text-sm">Notch divider walls too</span>
+                    </label>
+                  )}
                   <div className="space-y-2">
                     <div className="flex justify-between items-center">
                       <Label>Slot Width (mm)</Label>
@@ -734,7 +748,8 @@ export function ControlPanel({
                       onValueChange={(value) => updateParam('fingerSlotPosition', value)}
                     />
                     <p className="text-xs text-muted-foreground">
-                      Where the notch sits along the wall — 50% is centred.
+                      Where each notch sits along its open span — 50% is centred. With crossing
+                      dividers the position applies within each compartment's span.
                     </p>
                   </div>
                 </div>

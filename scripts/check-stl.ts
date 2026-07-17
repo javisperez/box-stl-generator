@@ -83,6 +83,20 @@ const checks: Check[] = [
     })],
   },
   {
+    name: 'box · finger slots grid X+Z dividers (per-span)',
+    build: () => [generateBox({
+      ...base, divisionsX: [33, 66], divisionsZ: [50],
+      fingerSlotAxes: 'both', fingerSlotWidth: 30, fingerSlotDepth: 15,
+    })],
+  },
+  {
+    name: 'box · finger slots outer walls only (no divider notches)',
+    build: () => [generateBox({
+      ...base, divisionsX: [33, 66], divisionsZ: [50],
+      fingerSlotAxes: 'both', fingerSlotDividers: false,
+    })],
+  },
+  {
     name: 'box · finger slots + pattern hexagons',
     build: () => [generateBox({
       ...base, divisionsX: [50], boxPattern: 'hexagons', fingerSlotAxes: 'both',
