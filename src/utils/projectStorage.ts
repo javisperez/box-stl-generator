@@ -26,6 +26,7 @@ export const DEFAULTS: BoxParams = {
   fingerSlotWidth: 15,
   fingerSlotDepth: 15,
   fingerSlotPosition: 50,
+  fingerSlotDividers: true,
   chamferSize: 0,
   includeHinge: false,
   hingeCount: 1,
@@ -102,6 +103,7 @@ export function normalizeParams(raw: unknown): BoxParams {
   p.fingerSlotWidth = Math.min(Math.max(Number(p.fingerSlotWidth) || 15, 2), 100)
   p.fingerSlotDepth = Math.min(Math.max(Number(p.fingerSlotDepth) || 15, 2), 200)
   p.fingerSlotPosition = Math.min(Math.max(Number(p.fingerSlotPosition) || 50, 0), 100)
+  p.fingerSlotDividers = p.fingerSlotDividers !== false
   if (!Array.isArray(p.divisionsX)) p.divisionsX = []
   if (!Array.isArray(p.divisionsZ)) p.divisionsZ = []
   return p

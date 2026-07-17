@@ -47,7 +47,8 @@ export interface BoxParams {
   fingerSlotAxes: FingerSlotAxes // finger-access notches cut down from the top edge
   fingerSlotWidth: number      // notch width along the wall, in mm
   fingerSlotDepth: number      // how far down from the top edge, in mm
-  fingerSlotPosition: number   // notch centre as % along the wall (50 = centred)
+  fingerSlotPosition: number   // notch centre as % along each open span (50 = centred)
+  fingerSlotDividers: boolean  // also notch divider walls, not just the outer walls
   chamferSize: number        // 45° chamfer on outer vertical edges (0 = none)
   includeHinge: boolean
   hingeCount: number         // number of hinges along the back edge (1–3)
@@ -303,41 +304,61 @@ export function generateBox(params: BoxParams) {
 // ── Finger slots ──────────────────────────────────────────────────────────────
 // Rectangular notches cut down from the top edge so fingers can pinch flat
 // contents (cards, coins, tokens) out of a compartment. The 'x' axis notches
-// every wall perpendicular to X — the left/right outer walls and each X
-// divider — all at the same position along the depth, forming an aligned
-// finger channel across the whole box; 'z' does the same for the front/back
-// walls and Z dividers along the width.
+// every wall perpendicular to X — the left/right outer walls and (optionally)
+// each X divider; 'z' does the same for the front/back walls and Z dividers.
+// Perpendicular dividers split each wall into open spans, and every span gets
+// its own notch, so a notch never lands on a divider junction or corner —
+// with dividers in both X and Z the notches would otherwise carve chunks out
+// of the crossing walls.
 
-// Layout for one axis's slots: centre along the wall, width, and bottom Z.
-// Shared by the cutter and the wall-pattern exclusion rects so pattern holes
-// never get sliced open at a notch border.
+// Layout for one notch: centre along the wall, width, and bottom Z. Shared by
+// the cutter and the wall-pattern exclusion rects so pattern holes never get
+// sliced open at a notch border.
 interface FingerSlotLayout { c: number; w: number; zBot: number }
 
-function fingerSlotLayout(params: BoxParams, axis: 'x' | 'z'): FingerSlotLayout | null {
+function fingerSlotLayouts(params: BoxParams, axis: 'x' | 'z'): FingerSlotLayout[] {
   const { width, depth, height, wallThickness: wt, fingerSlotAxes } = params
-  if (fingerSlotAxes !== axis && fingerSlotAxes !== 'both') return null
+  if (fingerSlotAxes !== axis && fingerSlotAxes !== 'both') return []
 
   const h2 = height / 2
-  // Slot span along the wall, confined to the inner cavity span so notches
-  // never bite into the perpendicular walls, corners, or chamfers. The small
-  // margin also keeps cut planes clear of the chamfer faces when c == wt.
+  // Notches run along the inner cavity span so they never bite into the
+  // perpendicular walls, corners, or chamfers. The small margin also keeps
+  // cut planes clear of the chamfer faces and divider faces.
   const margin = 0.5
   const innerSpan = (axis === 'x' ? depth : width) - 2 * wt
-  const half = innerSpan / 2 - margin
-  if (half <= 1) return null
+  const dt = clampDivisionThickness(params.divisionThickness, wt)
 
-  const w = Math.min(Math.max(params.fingerSlotWidth, 2), half * 2)
-  const pct = Math.min(Math.max(params.fingerSlotPosition, 0), 100)
-  const c = Math.min(Math.max(-half + (pct / 100) * (2 * half), -half + w / 2), half - w / 2)
+  // Split the span at each perpendicular divider: one open span per segment.
+  // X-axis notches run along the depth, so Z dividers cross them (and vice
+  // versa). bounds always pairs up: [start, d1−, d1+, d2−, d2+, …, end].
+  const perpDivs = axis === 'x' ? params.divisionsZ : params.divisionsX
+  const bounds: number[] = [-innerSpan / 2]
+  for (const pct of [...perpDivs].sort((a, b) => a - b)) {
+    const p = -innerSpan / 2 + (pct / 100) * innerSpan
+    bounds.push(p - dt / 2, p + dt / 2)
+  }
+  bounds.push(innerSpan / 2)
 
   // Depth stops 0.5 mm above the floor so the slot's bottom cut plane never
   // coincides with the inner-floor plane (coplanar CSG faces corrupt shells)
   const d = Math.min(Math.max(params.fingerSlotDepth, 2), height - wt - 0.5)
-  return { c, w, zBot: h2 - d }
+  const zBot = h2 - d
+  const pct = Math.min(Math.max(params.fingerSlotPosition, 0), 100)
+
+  const slots: FingerSlotLayout[] = []
+  for (let i = 0; i < bounds.length - 1; i += 2) {
+    const a = bounds[i] + margin, b = bounds[i + 1] - margin
+    const usable = b - a
+    if (usable <= 2) continue // span too narrow for a useful notch
+    const w = Math.min(Math.max(params.fingerSlotWidth, 2), usable)
+    const c = a + w / 2 + (pct / 100) * (usable - w)
+    slots.push({ c, w, zBot })
+  }
+  return slots
 }
 
 function fingerSlotCutouts(params: BoxParams): any | null {
-  const { width, depth, height, wallThickness: wt, divisionsX, divisionsZ, divisionThickness, includeHinge } = params
+  const { width, depth, height, wallThickness: wt, divisionsX, divisionsZ, divisionThickness, includeHinge, fingerSlotDividers } = params
   const w2 = width / 2, d2 = depth / 2, h2 = height / 2
   const dt = clampDivisionThickness(divisionThickness, wt)
   const iw = width - 2 * wt, id = depth - 2 * wt
@@ -349,26 +370,26 @@ function fingerSlotCutouts(params: BoxParams): any | null {
   const prism = (cx: number, cy: number, sx: number, sy: number, zBot: number) =>
     translate([cx, cy, (zTop + zBot) / 2], cuboid({ size: [sx, sy, zTop - zBot] }))
 
-  const xSlot = fingerSlotLayout(params, 'x')
-  if (xSlot) {
-    const { c, w, zBot } = xSlot
+  for (const { c, w, zBot } of fingerSlotLayouts(params, 'x')) {
     solids.push(prism(-w2 + wt / 2, c, wt + 1, w, zBot)) // left outer wall
     solids.push(prism(w2 - wt / 2, c, wt + 1, w, zBot))  // right outer wall
-    for (const pct of divisionsX) {
-      const x = -iw / 2 + (pct / 100) * iw
-      solids.push(prism(x, c, dt + 1, w, zBot))
+    if (fingerSlotDividers) {
+      for (const pct of divisionsX) {
+        const x = -iw / 2 + (pct / 100) * iw
+        solids.push(prism(x, c, dt + 1, w, zBot))
+      }
     }
   }
 
-  const zSlot = fingerSlotLayout(params, 'z')
-  if (zSlot) {
-    const { c, w, zBot } = zSlot
+  for (const { c, w, zBot } of fingerSlotLayouts(params, 'z')) {
     solids.push(prism(c, -d2 + wt / 2, w, wt + 1, zBot)) // front outer wall
     // The back wall carries the hinge knuckle arms — keep it solid then
     if (!includeHinge) solids.push(prism(c, d2 - wt / 2, w, wt + 1, zBot))
-    for (const pct of divisionsZ) {
-      const y = -id / 2 + (pct / 100) * id
-      solids.push(prism(c, y, w, dt + 1, zBot))
+    if (fingerSlotDividers) {
+      for (const pct of divisionsZ) {
+        const y = -id / 2 + (pct / 100) * id
+        solids.push(prism(c, y, w, dt + 1, zBot))
+      }
     }
   }
 
@@ -549,10 +570,10 @@ function boxWallHoles(params: BoxParams): any | null {
 
   // Keep pattern holes clear of the finger slots — a hole straddling a notch
   // border would be sliced open into a stress-raising partial cut
-  const slotRect = (s: FingerSlotLayout | null): Rect2[] =>
-    s ? [{ x0: s.c - s.w / 2 - 1.5, x1: s.c + s.w / 2 + 1.5, y0: s.zBot - 1.5, y1: h2 + 1 }] : []
-  const fbExclusions = slotRect(fingerSlotLayout(params, 'z'))
-  const lrExclusions = slotRect(fingerSlotLayout(params, 'x'))
+  const slotRects = (slots: FingerSlotLayout[]): Rect2[] =>
+    slots.map(s => ({ x0: s.c - s.w / 2 - 1.5, x1: s.c + s.w / 2 + 1.5, y0: s.zBot - 1.5, y1: h2 + 1 }))
+  const fbExclusions = slotRects(fingerSlotLayouts(params, 'z'))
+  const lrExclusions = slotRects(fingerSlotLayouts(params, 'x'))
 
   // Front & back walls: u = X, v = Z, extrusion punches through Y
   const fbRegion: Rect2 = { x0: -w2 + marginH, x1: w2 - marginH, y0: zBot, y1: zTop }
