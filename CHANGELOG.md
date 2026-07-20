@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 with date-based entries since the project has no version releases.
 
+## 2026-07-20
+
+### Fixed
+- **Interior height now accounts for the friction lid's lip.** With a cap-style
+  (non-hinged) lid enabled, the lip hangs `lidHeight` mm down into the box, so
+  the "Usable interior" readout subtracts it and "Generate with Compartments"
+  adds it to the box height. Previously boxes auto-sized to an item height were
+  too short by exactly the lip depth — the lid pressed on the contents (reported
+  by a user sizing boxes for sleeved cards). Hinged lids (flat, no lip) and
+  sleeve-style covers are unaffected. Help text in both places explains the
+  lip adjustment when it applies.
+
 ## 2026-07-17
 
 ### Fixed
