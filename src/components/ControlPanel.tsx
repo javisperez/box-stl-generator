@@ -115,10 +115,18 @@ export function ControlPanel({
     setActiveTab('box')
   }
 
+  // Friction-fit cap lids hang their lip down into the box interior, so that
+  // depth is lost to contents when the lid is on. Hinged lids are flat slabs
+  // and sleeves wrap the outside — neither costs interior height.
+  const frictionLipDepth =
+    params.includeLid && params.lidStyle === 'lid' && !params.includeHinge
+      ? params.lidHeight
+      : 0
+
   const generateFromCompartments = () => {
     const totalWidth = itemWidth * Math.ceil(Math.sqrt(compartmentCount)) + params.wallThickness * (Math.ceil(Math.sqrt(compartmentCount)) + 1)
     const totalDepth = itemDepth * Math.ceil(compartmentCount / Math.ceil(Math.sqrt(compartmentCount))) + params.wallThickness * (Math.ceil(compartmentCount / Math.ceil(Math.sqrt(compartmentCount))) + 1)
-    const totalHeight = itemHeight + params.wallThickness
+    const totalHeight = itemHeight + params.wallThickness + frictionLipDepth
 
     const newParams = {
       ...params,
@@ -209,7 +217,7 @@ export function ControlPanel({
   // Box dims are OUTER; interior loses two walls in X/Z and only the floor in Y
   const innerW = Math.max(0, params.width - 2 * params.wallThickness)
   const innerD = Math.max(0, params.depth - 2 * params.wallThickness)
-  const innerH = Math.max(0, params.height - params.wallThickness)
+  const innerH = Math.max(0, params.height - params.wallThickness - frictionLipDepth)
   const divT = Math.min(params.divisionThickness, params.wallThickness)
   const fmt = (n: number) => String(Math.round(n * 10) / 10)
 
@@ -375,6 +383,8 @@ export function ControlPanel({
                     Item sizes are the clear interior space each compartment needs — wall and
                     divider thickness is added on top automatically, so the generated box is
                     larger than the items themselves.
+                    {frictionLipDepth > 0 &&
+                      ` The ${params.lidHeight} mm lid lip is also added to the height, so items still fit with the lid on.`}
                   </p>
 
                   <Button onClick={generateFromCompartments} className="w-full">
@@ -523,8 +533,12 @@ export function ControlPanel({
               </p>
               <p>
                 Usable interior: <strong>{fmt(innerW)} × {fmt(innerD)} × {fmt(innerH)} mm</strong>{' '}
-                (W × D × H). The sides lose two {params.wallThickness} mm walls; the height only
-                loses the floor, since the top is open.
+                (W × D × H). The sides lose two {params.wallThickness} mm walls; the height loses
+                the floor{frictionLipDepth > 0
+                  ? <> and the {params.lidHeight} mm lid lip that hangs into the box when the lid is on</>
+                  : params.includeLid
+                    ? ' only — hinged lids are flat and sleeves wrap the outside, so no height is lost to a lip'
+                    : ', since the top is open'}.
               </p>
             </div>
 
