@@ -7,6 +7,7 @@ import {
 } from './utils/boxGenerator'
 import { textToJscadGeometry } from './utils/textGenerator'
 import { exportJscadToSTL, exportMultipleJscadToSTL, jscadVolumeCm3 } from './utils/stlExporter'
+import { exportSpecSheetPDF } from './utils/specSheetExporter'
 import { Button } from './components/ui/button'
 import {
   DEFAULTS, SavedProject, loadCurrentParams, saveCurrentParams, clearCurrentParams,
@@ -15,7 +16,7 @@ import {
   exportAllProjectsFile, consumeShareLink,
   AppSettings, loadSettings, saveSettings, slugify,
 } from './utils/projectStorage'
-import { Github, Download, Plus, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react'
+import { Github, Download, Plus, ChevronDown, ChevronUp, AlertTriangle, FileText } from 'lucide-react'
 import * as THREE from 'three'
 
 const PLA_DENSITY = 1.24 // g/cm³, solid
@@ -273,6 +274,26 @@ function App() {
   const exportExpanded = settings.exportExpanded
   const setExportExpanded = (expanded: boolean) => setSettings({ ...settings, exportExpanded: expanded })
 
+  const handleExportSpecSheet = () => {
+    if (!boxJscad) return
+    exportSpecSheetPDF({
+      params,
+      projectName,
+      boxVolumeCm3: boxVolume,
+      lidVolumeCm3: lidVolume,
+      sleeve,
+      compartments,
+      printerBedX: settings.printerBedX,
+      printerBedY: settings.printerBedY,
+      oversizedParts,
+      stlFilenames: {
+        box: stlName('box'),
+        lid: params.includeLid ? stlName(isSleeve ? 'sleeve' : 'lid') : undefined,
+      },
+      filename: stlName('spec-sheet').replace(/\.stl$/, '.pdf'),
+    })
+  }
+
   return (
     <div className="min-h-screen bg-background lg:h-screen lg:flex lg:overflow-hidden">
       {/* Preview — fills every pixel the sidebar doesn't use */}
@@ -339,21 +360,32 @@ function App() {
             </div>
           )}
 
-          <div className="flex items-center bg-card/90 backdrop-blur border rounded-lg overflow-hidden pointer-events-auto">
-            <Button variant="ghost" className="rounded-none" onClick={handleExportAll}>
-              <Download className="mr-2 h-4 w-4" />
-              Export {params.includeLid ? 'all' : 'box'}
-              {totalVolume > 0 && (
-                <span className="ml-2 text-xs text-muted-foreground">≈ {formatGrams(totalVolume)} g PLA</span>
-              )}
-            </Button>
-            <button
-              className="px-2.5 self-stretch border-l text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-              onClick={() => setExportExpanded(!exportExpanded)}
-              title={exportExpanded ? 'Collapse part details' : 'Expand part details'}
+          <div className="flex items-center gap-2 pointer-events-auto">
+            <div className="flex items-center bg-card/90 backdrop-blur border rounded-lg overflow-hidden">
+              <Button variant="ghost" className="rounded-none" onClick={handleExportAll}>
+                <Download className="mr-2 h-4 w-4" />
+                Export {params.includeLid ? 'all' : 'box'}
+                {totalVolume > 0 && (
+                  <span className="ml-2 text-xs text-muted-foreground">≈ {formatGrams(totalVolume)} g PLA</span>
+                )}
+              </Button>
+              <button
+                className="px-2.5 self-stretch border-l text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                onClick={() => setExportExpanded(!exportExpanded)}
+                title={exportExpanded ? 'Collapse part details' : 'Expand part details'}
+              >
+                {exportExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+              </button>
+            </div>
+            <Button
+              variant="outline"
+              className="bg-card/90 backdrop-blur"
+              onClick={handleExportSpecSheet}
+              title="Download a PDF with all box, lid, and hole dimensions"
             >
-              {exportExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
-            </button>
+              <FileText className="mr-2 h-4 w-4" />
+              Spec Sheet (PDF)
+            </Button>
           </div>
         </div>
       </main>
@@ -362,13 +394,13 @@ function App() {
       <aside className="lg:w-105 lg:shrink-0 lg:h-full flex flex-col border-t lg:border-t-0 lg:border-l bg-card">
         <header className="flex items-start justify-between gap-4 px-5 py-4 border-b">
           <div>
-            <h1 className="text-xl font-bold">3D Box Generator</h1>
+            <h1 className="text-xl font-bold">3D Box STL File Generator</h1>
             <p className="text-sm text-muted-foreground">
               Parametric boxes for 3D printing
             </p>
           </div>
           <a
-            href="https://github.com/javisperez/box-stl-generator"
+            href="https://chanchalsakardeqh.github.io/3d-Box-STL-FILE-Generator/"
             target="_blank"
             rel="noopener noreferrer"
             className="text-muted-foreground hover:text-foreground transition-colors mt-1"
@@ -400,27 +432,19 @@ function App() {
         </div>
 
         <footer className="px-5 py-3 border-t text-center text-xs text-muted-foreground">
-          Made by{' '}
+          Added feature by{' '}
           <a
-            href="https://github.com/javisperez"
+            href="https://github.com/ChanchalSakardeQH"
             target="_blank"
             rel="noopener noreferrer"
             className="underline hover:text-foreground transition-colors"
           >
-            Javis Perez
+            Chanchal Sakarde
           </a>
           {' '}&amp;{' '}
-          <a
-            href="https://claude.ai"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline hover:text-foreground transition-colors"
-          >
-            Claude
-          </a>
           {' '}&middot;{' '}
           <a
-            href="https://github.com/javisperez/box-stl-generator"
+            href="https://github.com/ChanchalSakardeQH/3d-Box-STL-FILE-Generator"
             target="_blank"
             rel="noopener noreferrer"
             className="underline hover:text-foreground transition-colors"

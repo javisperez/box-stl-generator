@@ -18,12 +18,12 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # pnpm version comes from the packageManager field in package.json
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
@@ -36,7 +36,7 @@ jobs:
 
       - run: pnpm run build
         env:
-          BASE_URL: /box-stl-generator/
+          BASE_URL: /3d-Box-STL-FILE-Generator/
 
       - uses: actions/upload-pages-artifact@v3
         with:

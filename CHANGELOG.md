@@ -4,6 +4,66 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 with date-based entries since the project has no version releases.
 
+## 2026-08-31 (3)
+
+### Fixed
+- **"Dividers Only" wasn't actually excluding the outer walls.** The Notch buttons (`Outer Walls` / `Outer + Dividers` / `Dividers Only`) set two fields at once — `fingerSlotOuterWalls` and `fingerSlotDividers` — via two back-to-back calls to `updateParam()`. `updateParam` builds its update by spreading the component's current `params` prop, which doesn't reflect the first call's change until React re-renders; so the second call silently overwrote the first one's field back to its old value. In practice this meant clicking "Dividers Only" set `fingerSlotDividers` correctly but reverted `fingerSlotOuterWalls` back to `true`, so the outer walls kept getting notched exactly as if "Outer + Dividers" were still selected. Fixed by combining both field updates into a single `onParamsChange()` call so they land together. The same bug was present in the lid cutout pattern's "Reset to full lid" button (four chained `updateParam()` calls, only the last of which actually stuck) — fixed the same way.
+- Audited the rest of `ControlPanel.tsx` for any other handler calling `updateParam()` more than once in a single click; none remain — every multi-field update now goes through one `onParamsChange()` call.
+
+## 2026-08-31 (2)
+
+### Fixed
+- **"Notch" selector (Outer Walls / Outer + Dividers / Dividers Only) now shows for both Finger Slot axes.** It was only appearing when the *currently selected* axis already had matching dividers configured — e.g. selecting **Z Walls** hid the selector entirely if only X dividers existed (and vice versa for **X Walls** with only Z dividers), making **"Dividers Only"** effectively unreachable for whichever axis didn't yet have dividers on it. The selector is now always shown whenever a Finger Slot axis is active, regardless of which dividers currently exist. When you do pick "Outer + Dividers" or "Dividers Only" for an axis that has no dividers yet, a small note explains there's nothing to notch there until one is added — rather than the control just disappearing.
+
+## 2026-08-31
+
+### Added
+- **Cutout pattern on divider walls.** In **Box → Cutout Pattern**, a new **"Also cut the pattern into divider walls"** checkbox extends the repeating side-wall pattern onto the X/Z divider walls too — previously dividers always stayed solid regardless of the box pattern. Off by default so existing designs render unchanged; each divider is punched through its own thickness the same way the outer walls are, staying clear of the top rim, the floor, and every crossing perpendicular divider at each intersection.
+- **Exclude the floor from the cutout pattern.** A second new checkbox, **"Keep the base solid (exclude the floor)"**, skips the floor when the box's cutout pattern is applied — previously the floor always got the same pattern as the side walls whenever one was selected. Handy for a box that should sit flush and flat (no light/dust leaking through the bottom) while still shedding filament on the sides.
+- Added `boxPatternDividers` / `boxPatternSkipFloor` fields to `BoxParams`, a new `dividerWallHoles()` geometry function in `boxGenerator.ts` (mirrors `boxWallHoles()`'s per-wall punching, but for the thinner divider walls), gated the existing `boxFloorHoles()` call behind the new skip-floor flag, defaults/sanitization in `projectStorage.ts`, and spec-sheet lines reporting whether dividers/floor are patterned or solid.
+- **"Notch divider walls only" option for Finger Slots.** The old single **"Notch divider walls too"** checkbox (which always notched the outer walls, optionally adding dividers) is now a three-way choice: **Outer Walls** (original default), **Outer + Dividers** (previous "too" behavior), and **Dividers Only** — leaves the outside of the box smooth and cuts finger-access notches only where compartments meet, for a cleaner exterior.
+- Added a `fingerSlotOuterWalls` field to `BoxParams` (default `true`) alongside the existing `fingerSlotDividers`; `fingerSlotCutouts()` now gates the outer-wall notch prisms behind it. `projectStorage.ts` sanitizes both fields and falls back to notching the outer walls if a saved project somehow has both turned off, so there's always at least one place to get a grip.
+- Added `check:stl` mesh-integrity cases covering divider-pattern cutouts (every shape, plus combined with chamfer/finger-slots/skip-floor), skip-floor alone and combined with divider cutouts, and dividers-only finger notches (including with a hinge, where the back wall must stay solid) — all 64 configurations in the sweep pass.
+
+## 2026-08-12
+
+### Added
+- **Scalable, positionable lid cutout pattern.** In **Lid → Cutout Pattern**, the repeating pattern (Circles/Squares/Diamonds/Hexagons/Triangles/Slots) no longer has to cover the whole lid cap. Two new sliders, **Coverage Width (%)** and **Coverage Depth (%)** (10–100%), shrink the cutout area down to a scalable region — 50% × 100% for a half, 50% × 50% for a quarter, or any custom fraction. Two more, **Position X (%)** and **Position Y (%)** (-100 to 100), then slide that smaller region around within the lid: 0 is centered, and ±100 pushes it to the opposite edges. Both position sliders are disabled while their matching coverage is at 100%, since there's no slack to slide through. A **"Reset to full lid"** button appears once coverage or position has been changed. This only applies to the lid cap (`lidStyle: 'lid'`); sleeve wall patterns are unaffected.
+- Added `lidPatternCoverageX` / `lidPatternCoverageY` / `lidPatternOffsetX` / `lidPatternOffsetY` fields to `BoxParams`, a shared `applyRegionCoverage()` helper in `boxGenerator.ts` that shrinks and re-centers a `Rect2` region, and matching defaults/clamping in `projectStorage.ts` so older saved/shared projects load safely (they default to 100% coverage, 0% offset — the original full-cap behavior). The spec sheet PDF now lists the coverage and position values whenever they differ from full coverage.
+- **Custom-hole size limits now scale with the box.** In **Lid → Custom Holes**, the Width/Length sliders (for slots with "Set width & length separately" checked) and the Size slider (for every other shape) used to cap out at a fixed 40–80 mm regardless of the box's actual dimensions — so a deep box couldn't use holes as large as it had room for, while a small box could be told to accept holes bigger than the lid could safely hold. Both sliders' maximums are now derived from the box's real width/depth, wall thickness, and the lid's **Fit Tolerance**, matching the same safe-area math the lid already uses to keep cutouts clear of the lip walls (or the solid border on a hinged lid). Resize the box or change the Fit Tolerance and the available range updates immediately.
+- Added an exported `lidCustomHoleMaxDims()` helper in `boxGenerator.ts` that returns the largest safe width/length for a lid-cap hole, used both to drive the sliders' `max` in `ControlPanel.tsx` and as a safety clamp inside `lidCustomHoleCutouts()` itself — so a hole set large on a bigger box can't cut into the lip walls if the box is later resized smaller.
+
+## 2026-08-11
+
+### Added
+- **Corner screw holes for Custom Holes.** In both **Box → Custom Holes (Floor)** and **Lid → Custom Holes**, selecting the **Circles** shape now reveals an **Add 4 symmetric corner holes (for screws)** checkbox. When checked, the single positioned hole is replaced by four identical circular holes mirrored across all four corners — handy for mounting-screw patterns on an enclosure floor or lid. Two sliders, **Corner Inset — Width (mm)** and **Corner Inset — Depth (mm)** (2–40 mm each), control how far each hole sits from the nearest edge on each axis independently — so the four holes can form a rectangle matching real screw spacing, not just a square — and replace the Position % sliders while corner mode is on; unchecking it restores the normal single-hole position controls. Both insets are automatically clamped so holes never run off the part or overlap the lid's lip/hinge margins, and on the lid, corner holes still respect the engraved/embossed text exclusion zone just like a normal custom hole.
+- **Shift the whole corner-hole group.** The 4-hole rectangle doesn't have to stay centered on the floor or lid: two more sliders, **Shift Group — Width (%)** and **Shift Group — Depth (%)**, slide the entire group left/right and forward/back as a rigid block (50% = centered, matching the original behavior). How far it can slide is limited by the slack between the chosen Corner Inset and the minimum safe edge margin — a tight inset (holes already hugging the edge) leaves little or no room to shift.
+- Added `cornerHoles`/`cornerInsetX`/`cornerInsetY` fields to both `CustomHole` and `LidCustomHole`, a shared `clampCornerInset()` helper in `boxGenerator.ts`, and matching sanitization in `projectStorage.ts` so saved/shared/imported projects load safely (older projects default to `cornerHoles: false`; projects saved with the earlier single-value `cornerInset` field are read and applied to both axes automatically). The existing `posU`/`posV` fields are reused to drive the group-shift sliders when corner mode is on, rather than adding new fields.
+- Added `check:stl` mesh-integrity cases for corner screw holes (box floor, friction lid, hinged lid, lid text-exclusion interaction, and off-center group shifts at both slide extremes) and for slot custom holes with independent width/length, closing a gap in the existing sweep.
+- Added a **"Spec Sheet (PDF)"** export button next to your existing "Export all" control. Here's what changed:
+
+  **New file:** `src/utils/specSheetExporter.ts` — builds a multi-page PDF (via a new `jspdf` dependency, added to `package.json`) with:
+
+  - **Overview** — outer dimensions, wall thickness, chamfer, lid/sleeve style, total estimated PLA weight, print-bed fit check
+  - **Box body** — outer/inner footprint, inner height, volume/weight, and a **table of every compartment's exact interior size in mm** (computed from your divider positions + thickness, not just raw percentages)
+  - **Box custom holes** — face, shape, size (or slot W×L), and position for each one
+  - **Finger slots**, if enabled
+  - **Lid or sleeve** — cap/lip dimensions and tolerance, or sleeve outer size and sliding fit; hinge specs (count, barrel/pin diameter) if present; engraved/embossed text details; lid cutout pattern; lid custom holes table
+  - **3D print files** — the exact STL filenames it'll produce, so the sheet and the files stay matched up
+  - A short note on the PLA weight assumption and a reminder to verify tolerances before printing
+
+## 2026-08-10
+
+### Added
+- **Custom holes for lids.** The Lid tab now supports individually placed custom holes, mirroring the Box tab's custom-hole workflow. Each hole can be configured by **shape, size, and position** (Width % / Depth %).
+- **Lid custom-hole geometry.** Added a `LidCustomHole` type and `makeLidCustomHole()` factory, plus `lidCustomHoleCutouts()` to punch holes through the lid cap in the lid's own Z frame. Holes remain inside the same safe region used by lid cutout patterns: inside the lip for friction-fit lids and inset from the edge for hinged lids.
+- **Text-safe lid holes.** Custom lid holes that would overlap the engraved/embossed text patch are skipped so the text area remains intact.
+- **Combined lid cutouts.** `generateLid()` now combines pattern holes and custom holes before subtracting them from the lid geometry.
+- **Project persistence for lid holes.** Added `lidCustomHoles: []` to project defaults and normalization/sanitization so saved, shared, and imported projects load safely. Older projects without the field automatically default to an empty custom-hole list.
+- **Lid Custom Holes controls.** Added controls and handlers to add, update, and remove custom lid holes. The section appears below Cutout Pattern in the Lid tab and is hidden for drawer-sleeve lids because sleeves do not have a cap.
+
+- **Independent slot dimensions for Custom Holes.** In both **Box → Custom Holes** and **Lid → Custom Holes**, selecting **Slots** now reveals a **Set width & length separately** option. When unchecked, the existing single **Size (mm)** control remains unchanged; when checked, it is replaced by independent **Width (2–80 mm)** and **Length (2–40 mm)** controls for creating long/thin or short/wide slots. Other hole shapes are unaffected.
+
 ## 2026-07-20
 
 ### Fixed
@@ -125,9 +185,9 @@ with date-based entries since the project has no version releases.
   - The alternating (upside-down) triangle prisms are now built from exact
     mirrored coordinates instead of `rotate(π)`, avoiding 1e-16 skew in
     their cut planes.
-  All parts × all patterns × chamfer/divider/hinge combinations now export
-  watertight (0 open, 0 non-manifold, 0 flipped edges, holes verified by
-  volume) in an automated mesh-integrity sweep.
+    All parts × all patterns × chamfer/divider/hinge combinations now export
+    watertight (0 open, 0 non-manifold, 0 flipped edges, holes verified by
+    volume) in an automated mesh-integrity sweep.
 
 ### Added
 - **Box wall and floor cutout patterns.** The Box tab now has the same cutout

@@ -12,6 +12,87 @@ export type LidPattern = 'none' | 'circles' | 'squares' | 'diamonds' | 'hexagons
 
 export type FingerSlotAxes = 'none' | 'x' | 'z' | 'both'
 
+// A single standalone hole, independently sized and positioned — unlike the
+// repeating boxPattern/lidPattern grids, this cuts exactly one opening.
+export type CustomHoleShape = Exclude<LidPattern, 'none'>
+export type CustomHoleFace = 'front' | 'back' | 'left' | 'right' | 'floor'
+
+export const CUSTOM_HOLE_FACES: { value: CustomHoleFace; label: string }[] = [
+  { value: 'front', label: 'Front Wall' },
+  { value: 'back', label: 'Back Wall' },
+  { value: 'left', label: 'Left Wall' },
+  { value: 'right', label: 'Right Wall' },
+  { value: 'floor', label: 'Floor' },
+]
+
+export interface CustomHole {
+  id: string
+  face: CustomHoleFace
+  shape: CustomHoleShape
+  size: number    // feature size across, in mm — used unless useCustomSlotSize is on (slots only)
+  useCustomSlotSize: boolean // slots only: when true, use slotWidth/slotLength instead of size
+  slotWidth: number   // slots only: independent width, in mm
+  slotLength: number  // slots only: independent length, in mm
+  cornerHoles: boolean // circles + floor only: place 4 symmetric corner holes (e.g. for mounting screws) instead of one
+  cornerInsetX: number // mm from the left/right edges to a corner hole's center, when cornerHoles is on
+  cornerInsetY: number // mm from the front/back edges to a corner hole's center, when cornerHoles is on
+  posU: number    // 0-100 position along the wall's/floor's horizontal span; when cornerHoles is on, slides the whole 4-hole group left/right instead (50 = centered)
+  posV: number    // 0-100 position: up the wall (side faces) or along the floor's depth; when cornerHoles is on, slides the whole 4-hole group forward/back instead (50 = centered)
+}
+
+export function makeCustomHole(overrides?: Partial<CustomHole>): CustomHole {
+  return {
+    id: Math.random().toString(36).slice(2, 10),
+    face: 'front',
+    shape: 'circles',
+    size: 10,
+    useCustomSlotSize: false,
+    slotWidth: 20,
+    slotLength: 4.5,
+    cornerHoles: false,
+    cornerInsetX: 8,
+    cornerInsetY: 8,
+    posU: 50,
+    posV: 50,
+    ...overrides,
+  }
+}
+
+// A standalone hole on the lid cap (or sleeve top — see note on generateLid),
+// positioned the same way as a box CustomHole's 'floor' case: a percentage
+// across the cap's usable footprint. There's only one place to put it (the
+// cap), so unlike CustomHole there's no `face` field.
+export interface LidCustomHole {
+  id: string
+  shape: CustomHoleShape
+  size: number    // feature size across, in mm — used unless useCustomSlotSize is on (slots only)
+  useCustomSlotSize: boolean // slots only: when true, use slotWidth/slotLength instead of size
+  slotWidth: number   // slots only: independent width, in mm
+  slotLength: number  // slots only: independent length, in mm
+  cornerHoles: boolean // circles only: place 4 symmetric corner holes (e.g. for mounting screws) instead of one
+  cornerInsetX: number // mm from the left/right edges to a corner hole's center, when cornerHoles is on
+  cornerInsetY: number // mm from the front/back edges to a corner hole's center, when cornerHoles is on
+  posU: number    // 0-100 position across the cap's width; when cornerHoles is on, slides the whole 4-hole group left/right instead (50 = centered)
+  posV: number    // 0-100 position across the cap's depth; when cornerHoles is on, slides the whole 4-hole group forward/back instead (50 = centered)
+}
+
+export function makeLidCustomHole(overrides?: Partial<LidCustomHole>): LidCustomHole {
+  return {
+    id: Math.random().toString(36).slice(2, 10),
+    shape: 'circles',
+    size: 10,
+    useCustomSlotSize: false,
+    slotWidth: 20,
+    slotLength: 4.5,
+    cornerHoles: false,
+    cornerInsetX: 8,
+    cornerInsetY: 8,
+    posU: 50,
+    posV: 50,
+    ...overrides,
+  }
+}
+
 export const LID_PATTERNS: { value: LidPattern; label: string }[] = [
   { value: 'none', label: 'None' },
   { value: 'circles', label: 'Circles' },
@@ -21,6 +102,9 @@ export const LID_PATTERNS: { value: LidPattern; label: string }[] = [
   { value: 'triangles', label: 'Triangles' },
   { value: 'slots', label: 'Slots' },
 ]
+
+export const CUSTOM_HOLE_SHAPES = LID_PATTERNS.filter(p => p.value !== 'none') as
+  { value: Exclude<LidPattern, 'none'>; label: string }[]
 
 export interface BoxParams {
   width: number
@@ -41,14 +125,23 @@ export interface BoxParams {
   lidPattern: LidPattern       // cutout pattern through the lid cap / sleeve walls
   lidPatternSize: number       // feature size across, in mm
   lidPatternSpacing: number    // gap between features, in mm
+  lidPatternCoverageX: number  // % of the available lid-cap width the pattern region spans (10-100)
+  lidPatternCoverageY: number  // % of the available lid-cap depth the pattern region spans (10-100)
+  lidPatternOffsetX: number    // % slide of the pattern region within its leftover slack, -100 (left) .. 100 (right)
+  lidPatternOffsetY: number    // % slide of the pattern region within its leftover slack, -100 (front) .. 100 (back)
   boxPattern: LidPattern       // cutout pattern through the box's 4 outer side walls
   boxPatternSize: number       // feature size across, in mm
   boxPatternSpacing: number    // gap between features, in mm
+  boxPatternDividers: boolean  // also cut the cutout pattern into the X/Z divider walls (outer walls only by default)
+  boxPatternSkipFloor: boolean // exclude the floor from the cutout pattern, keeping the base solid and flat
+  customHoles: CustomHole[]    // standalone holes, individually sized/placed on a wall or the floor
+  lidCustomHoles: LidCustomHole[] // standalone holes, individually sized/placed on the lid cap
   fingerSlotAxes: FingerSlotAxes // finger-access notches cut down from the top edge
   fingerSlotWidth: number      // notch width along the wall, in mm
   fingerSlotDepth: number      // how far down from the top edge, in mm
   fingerSlotPosition: number   // notch centre as % along each open span (50 = centred)
   fingerSlotDividers: boolean  // also notch divider walls, not just the outer walls
+  fingerSlotOuterWalls: boolean // notch the outer walls; turn off (with fingerSlotDividers on) to notch dividers only
   chamferSize: number        // 45° chamfer on outer vertical edges (0 = none)
   includeHinge: boolean
   hingeCount: number         // number of hinges along the back edge (1–3)
@@ -290,12 +383,20 @@ export function generateBox(params: BoxParams) {
   const holeSolids: any[] = []
   if (params.boxPattern !== 'none') {
     const wallHoles = boxWallHoles(params)
-    const floorHoles = boxFloorHoles(params)
     if (wallHoles) holeSolids.push(wallHoles)
-    if (floorHoles) holeSolids.push(floorHoles)
+    if (!params.boxPatternSkipFloor) {
+      const floorHoles = boxFloorHoles(params)
+      if (floorHoles) holeSolids.push(floorHoles)
+    }
+    if (params.boxPatternDividers) {
+      const dividerHoles = dividerWallHoles(params)
+      if (dividerHoles) holeSolids.push(dividerHoles)
+    }
   }
   const fingerSlots = fingerSlotCutouts(params)
   if (fingerSlots) holeSolids.push(fingerSlots)
+  const customHoles = customHoleCutouts(params)
+  if (customHoles) holeSolids.push(customHoles)
   const holes = unionAll(holeSolids)
   if (holes) box = subtract(asGeom3(box), holes)
   return box
@@ -371,8 +472,10 @@ function fingerSlotCutouts(params: BoxParams): any | null {
     translate([cx, cy, (zTop + zBot) / 2], cuboid({ size: [sx, sy, zTop - zBot] }))
 
   for (const { c, w, zBot } of fingerSlotLayouts(params, 'x')) {
-    solids.push(prism(-w2 + wt / 2, c, wt + 1, w, zBot)) // left outer wall
-    solids.push(prism(w2 - wt / 2, c, wt + 1, w, zBot))  // right outer wall
+    if (params.fingerSlotOuterWalls) {
+      solids.push(prism(-w2 + wt / 2, c, wt + 1, w, zBot)) // left outer wall
+      solids.push(prism(w2 - wt / 2, c, wt + 1, w, zBot))  // right outer wall
+    }
     if (fingerSlotDividers) {
       for (const pct of divisionsX) {
         const x = -iw / 2 + (pct / 100) * iw
@@ -382,9 +485,11 @@ function fingerSlotCutouts(params: BoxParams): any | null {
   }
 
   for (const { c, w, zBot } of fingerSlotLayouts(params, 'z')) {
-    solids.push(prism(c, -d2 + wt / 2, w, wt + 1, zBot)) // front outer wall
-    // The back wall carries the hinge knuckle arms — keep it solid then
-    if (!includeHinge) solids.push(prism(c, d2 - wt / 2, w, wt + 1, zBot))
+    if (params.fingerSlotOuterWalls) {
+      solids.push(prism(c, -d2 + wt / 2, w, wt + 1, zBot)) // front outer wall
+      // The back wall carries the hinge knuckle arms — keep it solid then
+      if (!includeHinge) solids.push(prism(c, d2 - wt / 2, w, wt + 1, zBot))
+    }
     if (fingerSlotDividers) {
       for (const pct of divisionsZ) {
         const y = -id / 2 + (pct / 100) * id
@@ -404,6 +509,33 @@ function fingerSlotCutouts(params: BoxParams): any | null {
 
 interface Rect2 { x0: number; x1: number; y0: number; y1: number }
 
+/**
+ * Shrinks a pattern region to a scalable, positionable sub-area — e.g. "only
+ * the left half" or "a quarter, pushed into the back-right corner". coverage
+ * (10-100%) scales the region's width/depth down from its full available
+ * size; offset (-100..100%) then slides that smaller box through the
+ * leftover slack, where 0 stays centred, -100 hugs the x0/y0 edge, and 100
+ * hugs the x1/y1 edge. Coverage of 100 with offset 0 is a no-op (the
+ * original full-area behaviour).
+ */
+function applyRegionCoverage(
+  region: Rect2, coverageX: number, coverageY: number, offsetX: number, offsetY: number
+): Rect2 {
+  const cx = Math.min(Math.max(coverageX, 10), 100) / 100
+  const cy = Math.min(Math.max(coverageY, 10), 100) / 100
+  const ox = Math.min(Math.max(offsetX, -100), 100) / 100
+  const oy = Math.min(Math.max(offsetY, -100), 100) / 100
+  const W0 = region.x1 - region.x0
+  const D0 = region.y1 - region.y0
+  const newW = W0 * cx
+  const newD = D0 * cy
+  const slackX = (W0 - newW) / 2
+  const slackY = (D0 - newD) / 2
+  const centerX = (region.x0 + region.x1) / 2 + ox * slackX
+  const centerY = (region.y0 + region.y1) / 2 + oy * slackY
+  return { x0: centerX - newW / 2, x1: centerX + newW / 2, y0: centerY - newD / 2, y1: centerY + newD / 2 }
+}
+
 // 2D shape for one hole, centered at the origin. `size` is the across dimension.
 // `flipped` (triangles only) builds the 180°-rotated shape from exact mirrored
 // coordinates. It must NOT be produced with rotate([0, 0, Math.PI], …):
@@ -411,7 +543,10 @@ interface Rect2 { x0: number; x1: number; y0: number; y1: number }
 // its CSG cut planes stop lining up with the straight-built geometry, and the
 // T-junction repair on export can no longer pair the resulting vertices —
 // which is exactly the "80 non-manifold edges" corruption slicers reported.
-function patternShape2D(pattern: LidPattern, size: number, flipped = false): any | null {
+// `slotDims`, when given, overrides the derived [width, length] used for a
+// 'slots' shape — lets a standalone custom hole size its slot independently
+// instead of deriving width/length from a single `size` value.
+function patternShape2D(pattern: LidPattern, size: number, flipped = false, slotDims?: [number, number]): any | null {
   const r = size / 2
   switch (pattern) {
     case 'circles': return circle({ radius: r, segments: 20 })
@@ -421,14 +556,29 @@ function patternShape2D(pattern: LidPattern, size: number, flipped = false): any
     case 'triangles': return flipped
       ? polygon({ points: [[0, -r], [r * 0.866, r / 2], [-r * 0.866, r / 2]] })
       : polygon({ points: [[0, r], [-r * 0.866, -r / 2], [r * 0.866, -r / 2]] })
-    case 'slots': return rectangle({ size: [size * 2, size * 0.45] })
+    case 'slots': {
+      const [sw, sl] = slotDims ?? [size * 2, size * 0.45]
+      return rectangle({ size: [sw, sl] })
+    }
     default: return null
   }
 }
 
 // Half extents of a hole's footprint (grid fitting + exclusion tests)
-function patternHalfExtents(pattern: LidPattern, size: number): [number, number] {
-  return pattern === 'slots' ? [size, size * 0.225] : [size / 2, size / 2]
+function patternHalfExtents(pattern: LidPattern, size: number, slotDims?: [number, number]): [number, number] {
+  if (pattern === 'slots') {
+    const [sw, sl] = slotDims ?? [size * 2, size * 0.45]
+    return [sw / 2, sl / 2]
+  }
+  return [size / 2, size / 2]
+}
+
+// Clamp a corner hole's edge inset so its footprint (half-extent `he`) always
+// stays within the available half-span (`half`), with a small safety pad.
+function clampCornerInset(inset: number, half: number, he: number, pad = 1.5): number {
+  const lo = he + pad
+  const hi = Math.max(lo, half - he - pad)
+  return Math.min(Math.max(inset, lo), hi)
 }
 
 /**
@@ -646,6 +796,192 @@ function boxFloorHoles(params: BoxParams): any | null {
   )
 }
 
+/**
+ * Cutout pattern through the X/Z divider walls, mirroring boxWallHoles but
+ * for the thinner internal walls instead of the outer shell. Off by default
+ * (dividers stay solid) — enabled via boxPatternDividers so a divider-heavy
+ * box can shed extra weight/filament too, not just the outer walls.
+ * Each divider is punched the same way a left/right or front/back wall is:
+ * holes laid out in the divider's own (u, v) plane, then rotated so the
+ * canonical Z-extruded prism punches through the divider's actual thickness
+ * axis (X for an X-divider, Y for a Z-divider) before translating into
+ * place. Margins keep holes clear of the floor, the top edge, and the
+ * crossing perpendicular divider at each intersection.
+ */
+function dividerWallHoles(params: BoxParams): any | null {
+  const { width, depth, height, wallThickness: wt, divisionsX, divisionsZ, divisionThickness, boxPattern } = params
+  if (boxPattern === 'none') return null
+  if (divisionsX.length === 0 && divisionsZ.length === 0) return null
+
+  const iw2 = width / 2 - wt
+  const id2 = depth / 2 - wt
+  const h2 = height / 2
+  const fl = -h2 + wt // floor Z
+  const dt = clampDivisionThickness(divisionThickness, wt)
+
+  const marginH = 2                    // clear of the outer wall junctions
+  const marginV = wt + 2               // clear of the top rim and the floor
+  const zTop = h2 - marginV
+  const zBot = fl + marginV
+  if (zTop <= zBot) return null
+
+  const size = Math.max(2, params.boxPatternSize)
+  const spacing = Math.max(1.5, params.boxPatternSpacing)
+  const shape = patternShape2D(boxPattern, size)
+  if (!shape) return null
+
+  const h = dt + 1 // through-thickness, overshooting both faces slightly
+  const prism = extrudeLinear({ height: h }, shape)
+  const prismAlt = boxPattern === 'triangles'
+    ? extrudeLinear({ height: h }, patternShape2D(boxPattern, size, true))
+    : prism
+
+  const solids: any[] = []
+
+  // X dividers: u = Y, v = Z, extrusion punches through X — same rotation
+  // used for the box's own left/right walls.
+  const xdPrism = rotate([0, Math.PI / 2, 0], rotate([0, 0, Math.PI / 2], prism))
+  const xdPrismAlt = rotate([0, Math.PI / 2, 0], rotate([0, 0, Math.PI / 2], prismAlt))
+  for (const pct of divisionsX) {
+    const xd = -iw2 + (pct / 100) * (2 * iw2)
+    const region: Rect2 = { x0: -id2 + marginH, x1: id2 - marginH, y0: zBot, y1: zTop }
+    // Keep clear of every crossing Z-divider, which occupies its own thickness band along Y
+    const exclusions: Rect2[] = divisionsZ.map((pct2) => {
+      const yd = -id2 + (pct2 / 100) * (2 * id2)
+      return { x0: yd - dt / 2 - marginH, x1: yd + dt / 2 + marginH, y0: zBot - 1, y1: zTop + 1 }
+    })
+    const positions = patternGrid(boxPattern, size, spacing, region, exclusions)
+    if (!positions) continue
+    for (const p of positions) {
+      solids.push(translate([xd - dt / 2 - 0.5, p.x, p.y], p.alt ? xdPrismAlt : xdPrism))
+    }
+  }
+
+  // Z dividers: u = X, v = Z, extrusion punches through Y — same rotation
+  // used for the box's own front wall.
+  const zdPrism = rotate([Math.PI / 2, 0, 0], prism)
+  const zdPrismAlt = rotate([Math.PI / 2, 0, 0], prismAlt)
+  for (const pct of divisionsZ) {
+    const yd = -id2 + (pct / 100) * (2 * id2)
+    const region: Rect2 = { x0: -iw2 + marginH, x1: iw2 - marginH, y0: zBot, y1: zTop }
+    // Keep clear of every crossing X-divider, which occupies its own thickness band along X
+    const exclusions: Rect2[] = divisionsX.map((pct2) => {
+      const xd = -iw2 + (pct2 / 100) * (2 * iw2)
+      return { x0: xd - dt / 2 - marginH, x1: xd + dt / 2 + marginH, y0: zBot - 1, y1: zTop + 1 }
+    })
+    const positions = patternGrid(boxPattern, size, spacing, region, exclusions)
+    if (!positions) continue
+    for (const p of positions) {
+      // Negated-Z rotation (see boxWallHoles' front-wall comment): the local
+      // prism's extrusion axis maps to -Y, so the translate is the *far*
+      // edge of the punch, not the near one — offset by +h from yd - dt/2.
+      solids.push(translate([p.x, yd - dt / 2 - 0.5 + h, p.y], p.alt ? zdPrismAlt : zdPrism))
+    }
+  }
+
+  return unionAll(solids)
+}
+
+/**
+ * Standalone custom holes: each one independently placed on a single wall or
+ * the floor, sized and positioned via percentage sliders (posU/posV) so the
+ * placement stays sane regardless of the box's current dimensions. Reuses
+ * the same shape library and wall-punching geometry as the repeating
+ * boxPattern grid (see boxWallHoles/boxFloorHoles), just for a single feature
+ * instead of a tiled array.
+ *
+ * posU/posV are clamped so the hole's own footprint never hangs off the edge
+ * of its wall/floor — 0% and 100% land the hole just inside the safe margin,
+ * not with its center at the literal corner.
+ */
+function customHoleCutouts(params: BoxParams): any | null {
+  const { width, depth, height, wallThickness: wt, chamferSize, customHoles } = params
+  if (!customHoles || customHoles.length === 0) return null
+
+  const w2 = width / 2, d2 = depth / 2, h2 = height / 2
+  const c = Math.min(chamferSize, wt, width / 4, depth / 4)
+  const iw2 = w2 - wt, id2 = d2 - wt
+  const h = wt + 1 // through-thickness prism, overshooting both faces slightly
+
+  const solids: any[] = []
+
+  for (const hole of customHoles) {
+    const size = Math.max(1, hole.size)
+    const slotDims: [number, number] | undefined =
+      hole.shape === 'slots' && hole.useCustomSlotSize
+        ? [Math.max(1, hole.slotWidth), Math.max(1, hole.slotLength)]
+        : undefined
+    const shape2D = patternShape2D(hole.shape, size, false, slotDims)
+    if (!shape2D) continue
+    const [hx, hy] = patternHalfExtents(hole.shape, size, slotDims)
+    const prism = extrudeLinear({ height: h }, shape2D)
+    const pu = Math.min(Math.max(hole.posU, 0), 100) / 100
+    const pv = Math.min(Math.max(hole.posV, 0), 100) / 100
+
+    if (hole.face === 'floor') {
+      if (hole.shape === 'circles' && hole.cornerHoles) {
+        const insetX = clampCornerInset(hole.cornerInsetX, iw2, hx)
+        const insetY = clampCornerInset(hole.cornerInsetY, id2, hy)
+        const halfSpreadX = iw2 - insetX
+        const halfSpreadY = id2 - insetY
+        const marginX = 1.5 + hx, marginY = 1.5 + hy
+        // The 4-hole group can slide as a rigid block; how far depends on the
+        // slack between the chosen inset and the minimum safe margin — a
+        // tight inset (holes already near the edge) leaves no room to shift.
+        const slideX = Math.max(0, insetX - marginX)
+        const slideY = Math.max(0, insetY - marginY)
+        const offsetX = (pu * 2 - 1) * slideX
+        const offsetY = (pv * 2 - 1) * slideY
+        for (const sx of [-1, 1]) {
+          for (const sy of [-1, 1]) {
+            const x = offsetX + sx * halfSpreadX
+            const y = offsetY + sy * halfSpreadY
+            solids.push(translate([x, y, -h2 - 0.5], prism))
+          }
+        }
+        continue
+      }
+      const marginX = 1.5 + hx, marginY = 1.5 + hy
+      const spanX = Math.max(0, 2 * iw2 - 2 * marginX)
+      const spanY = Math.max(0, 2 * id2 - 2 * marginY)
+      const x = -iw2 + marginX + pu * spanX
+      const y = -id2 + marginY + pv * spanY
+      solids.push(translate([x, y, -h2 - 0.5], prism))
+      continue
+    }
+
+    // Side walls: u runs along the wall's length, v runs up its height —
+    // margins keep the hole clear of corners/chamfers and the top rim/floor,
+    // same as boxWallHoles.
+    const marginV = wt + 2 + hy
+    const spanV = Math.max(0, height - 2 * marginV)
+    const v = -h2 + marginV + pv * spanV
+
+    if (hole.face === 'front' || hole.face === 'back') {
+      const marginU = Math.max(c, 1) + 2 + hx
+      const spanU = Math.max(0, width - 2 * marginU)
+      const u = -w2 + marginU + pu * spanU
+      if (hole.face === 'front') {
+        solids.push(translate([u, -d2 - 0.5, v], rotate([Math.PI / 2, 0, 0], prism)))
+      } else {
+        solids.push(translate([u, d2 + 0.5 - h, v], rotate([-Math.PI / 2, 0, 0], prism)))
+      }
+    } else {
+      const marginU = Math.max(c, 1) + 2 + hx
+      const spanU = Math.max(0, depth - 2 * marginU)
+      const u = -d2 + marginU + pu * spanU
+      const sidePrism = rotate([0, Math.PI / 2, 0], rotate([0, 0, Math.PI / 2], prism))
+      if (hole.face === 'left') {
+        solids.push(translate([-w2 - 0.5, u, v], sidePrism))
+      } else {
+        solids.push(translate([iw2 - 0.5, u, v], sidePrism))
+      }
+    }
+  }
+
+  return unionAll(solids)
+}
+
 // A padded Rect2 around geometry's XY bounding box (for text exclusion zones)
 function boundsRect(geom: any, pad: number, mirrorInX: boolean): Rect2 {
   const bb = measureBoundingBox(geom)
@@ -662,6 +998,32 @@ function boundsRect(geom: any, pad: number, mirrorInX: boolean): Rect2 {
 // Direct-built geometry is a plain {polygons} object; booleans need a geom3
 function asGeom3(g: any): any {
   return g && g.transforms ? g : geom3.create(g.polygons)
+}
+
+/**
+ * Largest width/length (mm) a lid-cap custom hole can have before it starts
+ * cutting into the lip walls above the cap (friction lid) or the solid
+ * border around a hinged slab. Scales with the box's actual width/depth,
+ * wall thickness, and — for a friction lid — the lid's Fit Tolerance, since
+ * a looser fit shrinks the lip's inner footprint the cap must stay clear of.
+ * Mirrors the safe-area math in lidPatternHoles / lidCustomHoleCutouts, so
+ * a slider capped at these values can never suggest a size the geometry
+ * would then have to clip.
+ */
+export function lidCustomHoleMaxDims(params: BoxParams): { maxWidth: number; maxLength: number } {
+  const { width, depth, wallThickness: wt, lidTolerance: tol, includeHinge } = params
+  const w2 = width / 2
+  const d2 = depth / 2
+  let ix: number, iy: number
+  if (includeHinge) {
+    const inset = wt + 2
+    ix = w2 - inset
+    iy = d2 - inset
+  } else {
+    ix = w2 - wt - tol - wt - 1.5
+    iy = d2 - wt - tol - wt - 1.5
+  }
+  return { maxWidth: Math.max(2, ix * 2), maxLength: Math.max(2, iy * 2) }
 }
 
 // Pattern holes for the lid cap, in the standard lid frame (cap Z ∈ [-wt, 0])
@@ -683,6 +1045,12 @@ function lidPatternHoles(params: BoxParams, textGeometry?: any): any | null {
     region = { x0: -ix, x1: ix, y0: -iy, y1: iy }
   }
 
+  region = applyRegionCoverage(
+    region,
+    params.lidPatternCoverageX, params.lidPatternCoverageY,
+    params.lidPatternOffsetX, params.lidPatternOffsetY
+  )
+
   const exclusions: Rect2[] = []
   if (textGeometry) {
     // Friction lid text is mirrored in X (it reads through the flip)
@@ -691,13 +1059,106 @@ function lidPatternHoles(params: BoxParams, textGeometry?: any): any | null {
   return patternPrisms(params, region, -wt - 0.5, 0.5, exclusions)
 }
 
+/*
+ * Standalone custom holes on the lid cap — the lid-side counterpart to
+ * customHoleCutouts' 'floor' case. Placed in the lid's own frame (cap
+ * Z ∈ [-wt, 0]) and kept within the same safe region lidPatternHoles uses:
+ * inside the lip's inner footprint for a friction lid, or inset from the
+ * edge for a hinged slab. A hole that would land on the engraved/embossed
+ * text patch is skipped, same as the repeating cutout pattern does.
+ */
+function lidCustomHoleCutouts(params: BoxParams, textGeometry?: any): any | null {
+  const { width, depth, wallThickness: wt, lidTolerance: tol, includeHinge, lidCustomHoles } = params
+  if (!lidCustomHoles || lidCustomHoles.length === 0) return null
+  const w2 = width / 2
+  const d2 = depth / 2
+
+  let region: Rect2
+  if (includeHinge) {
+    const inset = wt + 2
+    region = { x0: -w2 + inset, x1: w2 - inset, y0: -d2 + inset, y1: d2 - inset }
+  } else {
+    const ix = w2 - wt - tol - wt - 1.5
+    const iy = d2 - wt - tol - wt - 1.5
+    region = { x0: -ix, x1: ix, y0: -iy, y1: iy }
+  }
+
+  const textRect = textGeometry ? boundsRect(textGeometry, 1.5, !includeHinge) : null
+
+  // Safety clamp: if the box was resized smaller after a hole's dimensions
+  // were set, keep the hole from growing past the cap's safe area rather
+  // than cutting into the lip walls (or off the slab edge for a hinged lid).
+  const { maxWidth: capMaxW, maxLength: capMaxL } = lidCustomHoleMaxDims(params)
+
+  const solids: any[] = []
+  for (const hole of lidCustomHoles) {
+    const size = Math.min(Math.max(1, hole.size), Math.min(capMaxW, capMaxL))
+    const slotDims: [number, number] | undefined =
+      hole.shape === 'slots' && hole.useCustomSlotSize
+        ? [Math.min(Math.max(1, hole.slotWidth), capMaxW), Math.min(Math.max(1, hole.slotLength), capMaxL)]
+        : undefined
+    const shape2D = patternShape2D(hole.shape, size, false, slotDims)
+    if (!shape2D) continue
+    const [hx, hy] = patternHalfExtents(hole.shape, size, slotDims)
+
+    const prism = extrudeLinear({ height: wt + 1 }, shape2D)
+
+    if (hole.shape === 'circles' && hole.cornerHoles) {
+      const halfX = (region.x1 - region.x0) / 2
+      const halfY = (region.y1 - region.y0) / 2
+      const cx = (region.x0 + region.x1) / 2
+      const cy = (region.y0 + region.y1) / 2
+      const insetX = clampCornerInset(hole.cornerInsetX, halfX, hx)
+      const insetY = clampCornerInset(hole.cornerInsetY, halfY, hy)
+      const halfSpreadX = halfX - insetX
+      const halfSpreadY = halfY - insetY
+      // The 4-hole group can slide as a rigid block; how far depends on the
+      // slack between the chosen inset and the minimum safe margin (matching
+      // clampCornerInset's own pad) — a tight inset leaves no room to shift.
+      const slideX = Math.max(0, insetX - (hx + 1.5))
+      const slideY = Math.max(0, insetY - (hy + 1.5))
+      const pu = Math.min(Math.max(hole.posU, 0), 100) / 100
+      const pv = Math.min(Math.max(hole.posV, 0), 100) / 100
+      const offsetX = (pu * 2 - 1) * slideX
+      const offsetY = (pv * 2 - 1) * slideY
+      for (const sx of [-1, 1]) {
+        for (const sy of [-1, 1]) {
+          const x = cx + offsetX + sx * halfSpreadX
+          const y = cy + offsetY + sy * halfSpreadY
+          if (textRect && x + hx > textRect.x0 && x - hx < textRect.x1 &&
+              y + hy > textRect.y0 && y - hy < textRect.y1) {
+            continue // keeps the text's solid patch, same as the repeating pattern
+          }
+          solids.push(translate([x, y, -wt - 0.5], prism))
+        }
+      }
+      continue
+    }
+
+    const spanX = Math.max(0, (region.x1 - region.x0) - 2 * hx)
+    const spanY = Math.max(0, (region.y1 - region.y0) - 2 * hy)
+    const pu = Math.min(Math.max(hole.posU, 0), 100) / 100
+    const pv = Math.min(Math.max(hole.posV, 0), 100) / 100
+    const x = region.x0 + hx + pu * spanX
+    const y = region.y0 + hy + pv * spanY
+
+    if (textRect && x + hx > textRect.x0 && x - hx < textRect.x1 &&
+        y + hy > textRect.y0 && y - hy < textRect.y1) {
+      continue // keeps the text's solid patch, same as the repeating pattern
+    }
+
+    solids.push(translate([x, y, -wt - 0.5], prism))
+  }
+  return unionAll(solids)
+}
+
 export function generateLid(params: BoxParams, textGeometry?: any) {
   // Text requires CSG operations (subtract/union)
   let lid = textGeometry ? generateLidCSG(params, textGeometry) : generateFlatLid(params)
-  if (params.lidPattern !== 'none') {
-    const holes = lidPatternHoles(params, textGeometry)
-    if (holes) lid = subtract(asGeom3(lid), holes)
-  }
+  const patternHoles = params.lidPattern !== 'none' ? lidPatternHoles(params, textGeometry) : null
+  const customHoles = lidCustomHoleCutouts(params, textGeometry)
+  const holes = patternHoles && customHoles ? union(patternHoles, customHoles) : (patternHoles || customHoles)
+  if (holes) lid = subtract(asGeom3(lid), holes)
   return lid
 }
 

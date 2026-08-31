@@ -20,6 +20,8 @@ import {
   generateSleeve,
   generateBoxHingeKnuckles,
   generateLidHingeKnuckles,
+  makeCustomHole,
+  makeLidCustomHole,
 } from '../src/utils/boxGenerator'
 import { DEFAULTS } from '../src/utils/projectStorage'
 import { prepareTrianglesForExport } from '../src/utils/stlExporter'
@@ -97,6 +99,46 @@ const checks: Check[] = [
     })],
   },
   {
+    name: 'box · finger slots dividers only (no outer notches)',
+    build: () => [generateBox({
+      ...base, divisionsX: [33, 66], divisionsZ: [50],
+      fingerSlotAxes: 'both', fingerSlotOuterWalls: false, fingerSlotDividers: true,
+    })],
+  },
+  {
+    name: 'box · finger slots dividers only + hinge (back wall still solid)',
+    build: () => [generateBox({
+      ...base, divisionsZ: [50], includeHinge: true,
+      fingerSlotAxes: 'z', fingerSlotOuterWalls: false, fingerSlotDividers: true,
+    })],
+  },
+  ...PATTERNS.map(pattern => ({
+    name: `box · pattern ${pattern} + dividers cut too`,
+    build: () => [generateBox({
+      ...base, boxPattern: pattern, divisionsX: [33, 66], divisionsZ: [50],
+      boxPatternDividers: true,
+    })],
+  })),
+  {
+    name: 'box · pattern hexagons + dividers, chamfer, finger slots (combined)',
+    build: () => [generateBox({
+      ...base, boxPattern: 'hexagons', chamferSize: 1.5,
+      divisionsX: [50], divisionsZ: [40], boxPatternDividers: true,
+      fingerSlotAxes: 'both',
+    })],
+  },
+  {
+    name: 'box · pattern squares + skip floor (base stays flat)',
+    build: () => [generateBox({ ...base, boxPattern: 'squares', boxPatternSkipFloor: true })],
+  },
+  {
+    name: 'box · pattern circles + skip floor + dividers cut too',
+    build: () => [generateBox({
+      ...base, boxPattern: 'circles', divisionsX: [50], divisionsZ: [50],
+      boxPatternSkipFloor: true, boxPatternDividers: true,
+    })],
+  },
+  {
     name: 'box · finger slots + pattern hexagons',
     build: () => [generateBox({
       ...base, divisionsX: [50], boxPattern: 'hexagons', fingerSlotAxes: 'both',
@@ -115,6 +157,99 @@ const checks: Check[] = [
       const p = { ...base, includeLid: true, includeHinge: true, fingerSlotAxes: 'z' as const }
       return [generateBox(p), generateBoxHingeKnuckles(p)]
     },
+  },
+  ...(['front', 'back', 'left', 'right', 'floor'] as const).map(face => ({
+    name: `box · custom hole on ${face}`,
+    build: () => [generateBox({
+      ...base,
+      customHoles: [makeCustomHole({ face, shape: 'hexagons', size: 10, posU: 50, posV: 50 })],
+    })],
+  })),
+  ...PATTERNS.map(shape => ({
+    name: `box · custom hole shape ${shape}`,
+    build: () => [generateBox({
+      ...base,
+      customHoles: [makeCustomHole({ face: 'front', shape, size: 12, posU: 50, posV: 50 })],
+    })],
+  })),
+  {
+    name: 'box · custom holes at extreme positions (0%/100%) + chamfer',
+    build: () => [generateBox({
+      ...base,
+      chamferSize: 1.5,
+      customHoles: [
+        makeCustomHole({ face: 'front', shape: 'circles', size: 8, posU: 0, posV: 0 }),
+        makeCustomHole({ face: 'front', shape: 'circles', size: 8, posU: 100, posV: 100 }),
+        makeCustomHole({ face: 'left', shape: 'squares', size: 8, posU: 0, posV: 100 }),
+        makeCustomHole({ face: 'right', shape: 'diamonds', size: 8, posU: 100, posV: 0 }),
+        makeCustomHole({ face: 'floor', shape: 'triangles', size: 8, posU: 0, posV: 0 }),
+      ],
+    })],
+  },
+  {
+    name: 'box · custom holes + dividers + finger slots + pattern',
+    build: () => [generateBox({
+      ...base,
+      divisionsX: [50], divisionsZ: [50],
+      boxPattern: 'circles', fingerSlotAxes: 'both',
+      customHoles: [
+        makeCustomHole({ face: 'front', shape: 'hexagons', size: 10, posU: 20, posV: 80 }),
+        makeCustomHole({ face: 'back', shape: 'slots', size: 10, posU: 80, posV: 20 }),
+      ],
+    })],
+  },
+  {
+    name: 'box · custom hole on back wall with hinge',
+    build: () => {
+      const p = {
+        ...base, includeLid: true, includeHinge: true,
+        customHoles: [makeCustomHole({ face: 'back', shape: 'circles', size: 10, posU: 50, posV: 10 })],
+      }
+      return [generateBox(p), generateBoxHingeKnuckles(p)]
+    },
+  },
+  {
+    name: 'box · custom hole slot with independent width/length',
+    build: () => [generateBox({
+      ...base,
+      customHoles: [
+        makeCustomHole({ face: 'front', shape: 'slots', useCustomSlotSize: true, slotWidth: 30, slotLength: 6, posU: 50, posV: 50 }),
+        makeCustomHole({ face: 'floor', shape: 'slots', useCustomSlotSize: true, slotWidth: 5, slotLength: 35, posU: 50, posV: 50 }),
+      ],
+    })],
+  },
+  {
+    name: 'box · floor corner screw holes',
+    build: () => [generateBox({
+      ...base,
+      customHoles: [makeCustomHole({ face: 'floor', shape: 'circles', size: 4, cornerHoles: true, cornerInsetX: 6, cornerInsetY: 6 })],
+    })],
+  },
+  {
+    name: 'box · floor corner screw holes + chamfer + dividers',
+    build: () => [generateBox({
+      ...base,
+      chamferSize: 1.5, divisionsX: [50],
+      customHoles: [makeCustomHole({ face: 'floor', shape: 'circles', size: 5, cornerHoles: true, cornerInsetX: 20, cornerInsetY: 5 })],
+    })],
+  },
+  {
+    name: 'box · floor corner screw holes shifted off-center (extremes)',
+    build: () => [generateBox({
+      ...base,
+      customHoles: [
+        makeCustomHole({ face: 'floor', shape: 'circles', size: 4, cornerHoles: true, cornerInsetX: 20, cornerInsetY: 15, posU: 0, posV: 0 }),
+      ],
+    })],
+  },
+  {
+    name: 'box · floor corner screw holes shifted off-center (opposite extreme)',
+    build: () => [generateBox({
+      ...base,
+      customHoles: [
+        makeCustomHole({ face: 'floor', shape: 'circles', size: 4, cornerHoles: true, cornerInsetX: 20, cornerInsetY: 15, posU: 100, posV: 100 }),
+      ],
+    })],
   },
   {
     name: 'lid · plain',
@@ -135,6 +270,47 @@ const checks: Check[] = [
     name: 'lid · text embossed',
     build: () => {
       const p = { ...base, includeLid: true, lidText: 'H', lidTextStyle: 'embossed' as const }
+      return [generateLid(p, syntheticTextGeometry(p.lidTextDepth))]
+    },
+  },
+  {
+    name: 'lid · custom holes (mixed shapes incl. slot width/length)',
+    build: () => [generateLid({
+      ...base, includeLid: true,
+      lidCustomHoles: [
+        makeLidCustomHole({ shape: 'circles', size: 8, posU: 20, posV: 20 }),
+        makeLidCustomHole({ shape: 'slots', useCustomSlotSize: true, slotWidth: 25, slotLength: 5, posU: 70, posV: 70 }),
+      ],
+    })],
+  },
+  {
+    name: 'lid · corner screw holes (friction lid)',
+    build: () => [generateLid({
+      ...base, includeLid: true,
+      lidCustomHoles: [makeLidCustomHole({ shape: 'circles', size: 4, cornerHoles: true, cornerInsetX: 6, cornerInsetY: 12 })],
+    })],
+  },
+  {
+    name: 'lid · corner screw holes (hinged, flat slab)',
+    build: () => [generateLid({
+      ...base, includeLid: true, includeHinge: true,
+      lidCustomHoles: [makeLidCustomHole({ shape: 'circles', size: 5, cornerHoles: true, cornerInsetX: 8, cornerInsetY: 8 })],
+    })],
+  },
+  {
+    name: 'lid · corner screw holes shifted off-center',
+    build: () => [generateLid({
+      ...base, includeLid: true,
+      lidCustomHoles: [makeLidCustomHole({ shape: 'circles', size: 4, cornerHoles: true, cornerInsetX: 20, cornerInsetY: 16, posU: 0, posV: 100 })],
+    })],
+  },
+  {
+    name: 'lid · corner screw holes + text (exclusion still applies)',
+    build: () => {
+      const p = {
+        ...base, includeLid: true, lidText: 'H', lidTextStyle: 'engraved' as const,
+        lidCustomHoles: [makeLidCustomHole({ shape: 'circles', size: 4, cornerHoles: true, cornerInsetX: 6, cornerInsetY: 6 })],
+      }
       return [generateLid(p, syntheticTextGeometry(p.lidTextDepth))]
     },
   },

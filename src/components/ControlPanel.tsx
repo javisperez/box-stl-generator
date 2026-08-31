@@ -3,7 +3,7 @@ import { Label } from './ui/label'
 import { Slider } from './ui/slider'
 import { Button } from './ui/button'
 import { Save, RotateCcw, ChevronDown, Trash2, FileDown, FileUp, AlertTriangle, CheckCircle2, Link2, Check, Archive } from 'lucide-react'
-import { BoxParams, sleeveOuterDims, LID_PATTERNS } from '@/utils/boxGenerator'
+import { BoxParams, sleeveOuterDims, LID_PATTERNS, CustomHole, CUSTOM_HOLE_FACES, CUSTOM_HOLE_SHAPES, makeCustomHole, LidCustomHole, makeLidCustomHole, lidCustomHoleMaxDims } from '@/utils/boxGenerator'
 import { SavedProject, AppSettings, buildShareLink } from '@/utils/projectStorage'
 
 interface ControlPanelProps {
@@ -100,6 +100,36 @@ export function ControlPanel({
     const arr = [...params[axis]]
     arr[index] = value
     onParamsChange({ ...params, [axis]: arr })
+  }
+
+  const addCustomHole = () => {
+    onParamsChange({ ...params, customHoles: [...params.customHoles, makeCustomHole()] })
+  }
+
+  const updateCustomHole = (id: string, patch: Partial<CustomHole>) => {
+    onParamsChange({
+      ...params,
+      customHoles: params.customHoles.map(h => (h.id === id ? { ...h, ...patch } : h)),
+    })
+  }
+
+  const removeCustomHole = (id: string) => {
+    onParamsChange({ ...params, customHoles: params.customHoles.filter(h => h.id !== id) })
+  }
+
+  const addLidCustomHole = () => {
+    onParamsChange({ ...params, lidCustomHoles: [...params.lidCustomHoles, makeLidCustomHole()] })
+  }
+
+  const updateLidCustomHole = (id: string, patch: Partial<LidCustomHole>) => {
+    onParamsChange({
+      ...params,
+      lidCustomHoles: params.lidCustomHoles.map(h => (h.id === id ? { ...h, ...patch } : h)),
+    })
+  }
+
+  const removeLidCustomHole = (id: string) => {
+    onParamsChange({ ...params, lidCustomHoles: params.lidCustomHoles.filter(h => h.id !== id) })
   }
 
   const generateFromVolume = () => {
@@ -708,18 +738,43 @@ export function ControlPanel({
 
               {params.fingerSlotAxes !== 'none' && (
                 <div className="space-y-4 pt-1">
-                  {(((params.fingerSlotAxes === 'x' || params.fingerSlotAxes === 'both') && params.divisionsX.length > 0) ||
-                    ((params.fingerSlotAxes === 'z' || params.fingerSlotAxes === 'both') && params.divisionsZ.length > 0)) && (
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={params.fingerSlotDividers}
-                        onChange={(e) => updateParam('fingerSlotDividers', e.target.checked)}
-                        className="h-4 w-4 rounded border-gray-300"
-                      />
-                      <span className="text-sm">Notch divider walls too</span>
-                    </label>
-                  )}
+                  <div className="space-y-2">
+                    <Label>Notch</Label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {([
+                        { outer: true, dividers: false, label: 'Outer Walls' },
+                        { outer: true, dividers: true, label: 'Outer + Dividers' },
+                        { outer: false, dividers: true, label: 'Dividers Only' },
+                      ] as const).map(({ outer, dividers, label }) => (
+                        <button
+                          key={label}
+                          className={`px-2 py-1.5 text-sm rounded-md border ${
+                            params.fingerSlotOuterWalls === outer && params.fingerSlotDividers === dividers
+                              ? 'bg-primary text-primary-foreground' : 'bg-background'
+                          }`}
+                          onClick={() => {
+                            onParamsChange({ ...params, fingerSlotOuterWalls: outer, fingerSlotDividers: dividers })
+                          }}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      "Dividers Only" leaves the outer walls solid and notches just the
+                      crossing dividers — handy when you only need finger access between
+                      compartments, not from the outside.
+                    </p>
+                    {params.fingerSlotDividers &&
+                      !(((params.fingerSlotAxes === 'x' || params.fingerSlotAxes === 'both') && params.divisionsX.length > 0) ||
+                        ((params.fingerSlotAxes === 'z' || params.fingerSlotAxes === 'both') && params.divisionsZ.length > 0)) && (
+                        <p className="text-xs text-amber-600">
+                          No {params.fingerSlotAxes === 'z' ? 'Z' : params.fingerSlotAxes === 'x' ? 'X' : 'X or Z'}{' '}
+                          dividers yet, so there's nothing to notch there — add one above, or switch
+                          back to "Outer Walls".
+                        </p>
+                    )}
+                  </div>
                   <div className="space-y-2">
                     <div className="flex justify-between items-center">
                       <Label>Slot Width (mm)</Label>
@@ -819,8 +874,255 @@ export function ControlPanel({
                       Wider spacing means a stronger part; larger cutouts save more filament.
                     </p>
                   </div>
+
+                  <div className="space-y-2 pt-1 border-t">
+                    <label className="flex items-center gap-2 cursor-pointer pt-3">
+                      <input
+                        type="checkbox"
+                        checked={params.boxPatternDividers}
+                        onChange={(e) => updateParam('boxPatternDividers', e.target.checked)}
+                        className="h-4 w-4 rounded border-gray-300"
+                      />
+                      <span className="text-sm">Also cut the pattern into divider walls</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={params.boxPatternSkipFloor}
+                        onChange={(e) => updateParam('boxPatternSkipFloor', e.target.checked)}
+                        className="h-4 w-4 rounded border-gray-300"
+                      />
+                      <span className="text-sm">Keep the base solid (exclude the floor)</span>
+                    </label>
+                    <p className="text-xs text-muted-foreground">
+                      Dividers stay solid and the floor gets the same pattern as the walls by
+                      default. Check the first box to punch dividers too; check the second to
+                      leave the base flat and uncut.
+                    </p>
+                  </div>
                 </div>
               )}
+            </div>
+
+            <div className="space-y-3">
+              <div className="flex justify-between items-center">
+                <Label>Custom Holes</Label>
+                <Button variant="outline" size="sm" onClick={addCustomHole}>
+                  + Add Hole
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                One-off holes you place and size yourself — for cables, buttons, ventilation,
+                or anything the repeating cutout pattern above doesn't cover. Position is a
+                percentage along the wall (or floor), so it stays put if you resize the box.
+                {params.includeHinge && ' On the back wall, keep the vertical position low to clear the hinge.'}
+              </p>
+
+              {params.customHoles.length === 0 && (
+                <p className="text-xs text-muted-foreground italic">No custom holes yet.</p>
+              )}
+
+              {params.customHoles.map((hole, i) => (
+                <div key={hole.id} className="space-y-3 rounded-md border p-3">
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm font-medium">Hole {i + 1}</span>
+                    <button
+                      className="text-muted-foreground hover:text-destructive"
+                      onClick={() => removeCustomHole(hole.id)}
+                      aria-label="Remove hole"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <Label className="text-xs">Face</Label>
+                      <select
+                        className="w-full rounded-md border bg-background px-2 py-1.5 text-sm"
+                        value={hole.face}
+                        onChange={(e) => updateCustomHole(hole.id, { face: e.target.value as CustomHole['face'] })}
+                      >
+                        {CUSTOM_HOLE_FACES.map(({ value, label }) => (
+                          <option key={value} value={value}>{label}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Shape</Label>
+                      <select
+                        className="w-full rounded-md border bg-background px-2 py-1.5 text-sm"
+                        value={hole.shape}
+                        onChange={(e) => updateCustomHole(hole.id, { shape: e.target.value as CustomHole['shape'] })}
+                      >
+                        {CUSTOM_HOLE_SHAPES.map(({ value, label }) => (
+                          <option key={value} value={value}>{label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {hole.shape === 'slots' && (
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={hole.useCustomSlotSize}
+                        onChange={(e) => updateCustomHole(hole.id, { useCustomSlotSize: e.target.checked })}
+                        className="h-4 w-4 rounded border-gray-300"
+                      />
+                      <span className="text-sm">Set width &amp; length separately</span>
+                    </label>
+                  )}
+
+                  {hole.shape === 'slots' && hole.useCustomSlotSize ? (
+                    <>
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                          <Label className="text-xs">Width (mm)</Label>
+                          <span className="text-xs text-muted-foreground">{hole.slotWidth}</span>
+                        </div>
+                        <Slider
+                          min={2}
+                          max={80}
+                          step={0.5}
+                          value={hole.slotWidth}
+                          onValueChange={(value) => updateCustomHole(hole.id, { slotWidth: value })}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                          <Label className="text-xs">Length (mm)</Label>
+                          <span className="text-xs text-muted-foreground">{hole.slotLength}</span>
+                        </div>
+                        <Slider
+                          min={2}
+                          max={40}
+                          step={0.5}
+                          value={hole.slotLength}
+                          onValueChange={(value) => updateCustomHole(hole.id, { slotLength: value })}
+                        />
+                      </div>
+                    </>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-center">
+                        <Label className="text-xs">Size (mm)</Label>
+                        <span className="text-xs text-muted-foreground">{hole.size}</span>
+                      </div>
+                      <Slider
+                        min={2}
+                        max={40}
+                        step={0.5}
+                        value={hole.size}
+                        onValueChange={(value) => updateCustomHole(hole.id, { size: value })}
+                      />
+                    </div>
+                  )}
+
+                  {hole.face === 'floor' && hole.shape === 'circles' && (
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={hole.cornerHoles}
+                        onChange={(e) => updateCustomHole(hole.id, { cornerHoles: e.target.checked })}
+                        className="h-4 w-4 rounded border-gray-300"
+                      />
+                      <span className="text-sm">Add 4 symmetric corner holes (for screws)</span>
+                    </label>
+                  )}
+
+                  {hole.face === 'floor' && hole.shape === 'circles' && hole.cornerHoles ? (
+                    <>
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                          <Label className="text-xs">Corner Inset — Width (mm)</Label>
+                          <span className="text-xs text-muted-foreground">{hole.cornerInsetX}</span>
+                        </div>
+                        <Slider
+                          min={2}
+                          max={40}
+                          step={0.5}
+                          value={hole.cornerInsetX}
+                          onValueChange={(value) => updateCustomHole(hole.id, { cornerInsetX: value })}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                          <Label className="text-xs">Corner Inset — Depth (mm)</Label>
+                          <span className="text-xs text-muted-foreground">{hole.cornerInsetY}</span>
+                        </div>
+                        <Slider
+                          min={2}
+                          max={40}
+                          step={0.5}
+                          value={hole.cornerInsetY}
+                          onValueChange={(value) => updateCustomHole(hole.id, { cornerInsetY: value })}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                          <Label className="text-xs">Shift Group — Width (%)</Label>
+                          <span className="text-xs text-muted-foreground">{hole.posU}</span>
+                        </div>
+                        <Slider
+                          min={0}
+                          max={100}
+                          step={1}
+                          value={hole.posU}
+                          onValueChange={(value) => updateCustomHole(hole.id, { posU: value })}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                          <Label className="text-xs">Shift Group — Depth (%)</Label>
+                          <span className="text-xs text-muted-foreground">{hole.posV}</span>
+                        </div>
+                        <Slider
+                          min={0}
+                          max={100}
+                          step={1}
+                          value={hole.posV}
+                          onValueChange={(value) => updateCustomHole(hole.id, { posV: value })}
+                        />
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                          <Label className="text-xs">
+                            {hole.face === 'floor' ? 'Position — Width (%)' : 'Position — Along Wall (%)'}
+                          </Label>
+                          <span className="text-xs text-muted-foreground">{hole.posU}</span>
+                        </div>
+                        <Slider
+                          min={0}
+                          max={100}
+                          step={1}
+                          value={hole.posU}
+                          onValueChange={(value) => updateCustomHole(hole.id, { posU: value })}
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                          <Label className="text-xs">
+                            {hole.face === 'floor' ? 'Position — Depth (%)' : 'Position — Height (%)'}
+                          </Label>
+                          <span className="text-xs text-muted-foreground">{hole.posV}</span>
+                        </div>
+                        <Slider
+                          min={0}
+                          max={100}
+                          step={1}
+                          value={hole.posV}
+                          onValueChange={(value) => updateCustomHole(hole.id, { posV: value })}
+                        />
+                      </div>
+                    </>
+                  )}
+                </div>
+              ))}
             </div>
           </div>
         )}
@@ -958,9 +1260,308 @@ export function ControlPanel({
                           Wider spacing means a stronger part; larger cutouts save more filament.
                         </p>
                       </div>
+
+                      {!isSleeveStyle && (
+                        <div className="space-y-4 pt-1 border-t">
+                          <p className="text-xs text-muted-foreground pt-3">
+                            Shrink the cutout area to cover only part of the lid — half, a quarter, or any custom
+                            size — then slide it to where you want it.
+                          </p>
+                          <div className="space-y-2">
+                            <div className="flex justify-between items-center">
+                              <Label>Coverage Width (%)</Label>
+                              <span className="text-sm text-muted-foreground">{params.lidPatternCoverageX}</span>
+                            </div>
+                            <Slider
+                              min={10}
+                              max={100}
+                              step={5}
+                              value={params.lidPatternCoverageX}
+                              onValueChange={(value) => updateParam('lidPatternCoverageX', value)}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <div className="flex justify-between items-center">
+                              <Label>Coverage Depth (%)</Label>
+                              <span className="text-sm text-muted-foreground">{params.lidPatternCoverageY}</span>
+                            </div>
+                            <Slider
+                              min={10}
+                              max={100}
+                              step={5}
+                              value={params.lidPatternCoverageY}
+                              onValueChange={(value) => updateParam('lidPatternCoverageY', value)}
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              100% × 100% covers the whole lid. 50% × 100% is a half; 50% × 50% is a quarter.
+                            </p>
+                          </div>
+                          <div className="space-y-2">
+                            <div className="flex justify-between items-center">
+                              <Label>Position X (%)</Label>
+                              <span className="text-sm text-muted-foreground">{params.lidPatternOffsetX}</span>
+                            </div>
+                            <Slider
+                              min={-100}
+                              max={100}
+                              step={5}
+                              value={params.lidPatternOffsetX}
+                              onValueChange={(value) => updateParam('lidPatternOffsetX', value)}
+                              disabled={params.lidPatternCoverageX >= 100}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <div className="flex justify-between items-center">
+                              <Label>Position Y (%)</Label>
+                              <span className="text-sm text-muted-foreground">{params.lidPatternOffsetY}</span>
+                            </div>
+                            <Slider
+                              min={-100}
+                              max={100}
+                              step={5}
+                              value={params.lidPatternOffsetY}
+                              onValueChange={(value) => updateParam('lidPatternOffsetY', value)}
+                              disabled={params.lidPatternCoverageY >= 100}
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              Slides the cutout area within the lid once it's smaller than 100% — 0 is centred,
+                              -100/100 push it to the opposite edges.
+                            </p>
+                          </div>
+                          {(params.lidPatternCoverageX < 100 || params.lidPatternCoverageY < 100) && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => onParamsChange({
+                                ...params,
+                                lidPatternCoverageX: 100,
+                                lidPatternCoverageY: 100,
+                                lidPatternOffsetX: 0,
+                                lidPatternOffsetY: 0,
+                              })}
+                            >
+                              Reset to full lid
+                            </Button>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
+
+                {/* Custom holes — lid cap only (the sleeve has its own Cutout Pattern above) */}
+                {!isSleeveStyle && (() => {
+                  const { maxWidth: lidHoleMaxW, maxLength: lidHoleMaxL } = lidCustomHoleMaxDims(params)
+                  const lidHoleMaxSize = Math.min(lidHoleMaxW, lidHoleMaxL)
+                  return (
+                  <div className="space-y-3 pt-3 border-t">
+                    <div className="flex justify-between items-center">
+                      <Label>Custom Holes</Label>
+                      <Button variant="outline" size="sm" onClick={addLidCustomHole}>
+                        + Add Hole
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      One-off holes on the lid cap — for cables, buttons, ventilation, or
+                      anything the repeating cutout pattern above doesn't cover. Position is a
+                      percentage across the cap, so it stays put if you resize the box. A hole
+                      that would overlap the text patch is skipped.
+                    </p>
+
+                    {params.lidCustomHoles.length === 0 && (
+                      <p className="text-xs text-muted-foreground italic">No custom holes yet.</p>
+                    )}
+
+                    {params.lidCustomHoles.map((hole, i) => (
+                      <div key={hole.id} className="space-y-3 rounded-md border p-3">
+                        <div className="flex justify-between items-center">
+                          <span className="text-sm font-medium">Hole {i + 1}</span>
+                          <button
+                            className="text-muted-foreground hover:text-destructive"
+                            onClick={() => removeLidCustomHole(hole.id)}
+                            aria-label="Remove hole"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+
+                        <div className="space-y-1">
+                          <Label className="text-xs">Shape</Label>
+                          <select
+                            className="w-full rounded-md border bg-background px-2 py-1.5 text-sm"
+                            value={hole.shape}
+                            onChange={(e) => updateLidCustomHole(hole.id, { shape: e.target.value as LidCustomHole['shape'] })}
+                          >
+                            {CUSTOM_HOLE_SHAPES.map(({ value, label }) => (
+                              <option key={value} value={value}>{label}</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {hole.shape === 'slots' && (
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={hole.useCustomSlotSize}
+                              onChange={(e) => updateLidCustomHole(hole.id, { useCustomSlotSize: e.target.checked })}
+                              className="h-4 w-4 rounded border-gray-300"
+                            />
+                            <span className="text-sm">Set width &amp; length separately</span>
+                          </label>
+                        )}
+
+                        {hole.shape === 'slots' && hole.useCustomSlotSize ? (
+                          <>
+                            <div className="space-y-2">
+                              <div className="flex justify-between items-center">
+                                <Label className="text-xs">Width (mm)</Label>
+                                <span className="text-xs text-muted-foreground">{hole.slotWidth}</span>
+                              </div>
+                              <Slider
+                                min={2}
+                                max={lidHoleMaxW}
+                                step={0.5}
+                                value={hole.slotWidth}
+                                onValueChange={(value) => updateLidCustomHole(hole.id, { slotWidth: value })}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <div className="flex justify-between items-center">
+                                <Label className="text-xs">Length (mm)</Label>
+                                <span className="text-xs text-muted-foreground">{hole.slotLength}</span>
+                              </div>
+                              <Slider
+                                min={2}
+                                max={lidHoleMaxL}
+                                step={0.5}
+                                value={hole.slotLength}
+                                onValueChange={(value) => updateLidCustomHole(hole.id, { slotLength: value })}
+                              />
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                              Max width/length scales with the box's own size, wall thickness, and Fit
+                              Tolerance, so the hole always stays inside the lid's safe area.
+                            </p>
+                          </>
+                        ) : (
+                          <div className="space-y-2">
+                            <div className="flex justify-between items-center">
+                              <Label className="text-xs">Size (mm)</Label>
+                              <span className="text-xs text-muted-foreground">{hole.size}</span>
+                            </div>
+                            <Slider
+                              min={2}
+                              max={lidHoleMaxSize}
+                              step={0.5}
+                              value={hole.size}
+                              onValueChange={(value) => updateLidCustomHole(hole.id, { size: value })}
+                            />
+                          </div>
+                        )}
+
+                        {hole.shape === 'circles' && (
+                          <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={hole.cornerHoles}
+                              onChange={(e) => updateLidCustomHole(hole.id, { cornerHoles: e.target.checked })}
+                              className="h-4 w-4 rounded border-gray-300"
+                            />
+                            <span className="text-sm">Add 4 symmetric corner holes (for screws)</span>
+                          </label>
+                        )}
+
+                        {hole.shape === 'circles' && hole.cornerHoles ? (
+                          <>
+                            <div className="space-y-2">
+                              <div className="flex justify-between items-center">
+                                <Label className="text-xs">Corner Inset — Width (mm)</Label>
+                                <span className="text-xs text-muted-foreground">{hole.cornerInsetX}</span>
+                              </div>
+                              <Slider
+                                min={2}
+                                max={40}
+                                step={0.5}
+                                value={hole.cornerInsetX}
+                                onValueChange={(value) => updateLidCustomHole(hole.id, { cornerInsetX: value })}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <div className="flex justify-between items-center">
+                                <Label className="text-xs">Corner Inset — Depth (mm)</Label>
+                                <span className="text-xs text-muted-foreground">{hole.cornerInsetY}</span>
+                              </div>
+                              <Slider
+                                min={2}
+                                max={40}
+                                step={0.5}
+                                value={hole.cornerInsetY}
+                                onValueChange={(value) => updateLidCustomHole(hole.id, { cornerInsetY: value })}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <div className="flex justify-between items-center">
+                                <Label className="text-xs">Shift Group — Width (%)</Label>
+                                <span className="text-xs text-muted-foreground">{hole.posU}</span>
+                              </div>
+                              <Slider
+                                min={0}
+                                max={100}
+                                step={1}
+                                value={hole.posU}
+                                onValueChange={(value) => updateLidCustomHole(hole.id, { posU: value })}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <div className="flex justify-between items-center">
+                                <Label className="text-xs">Shift Group — Depth (%)</Label>
+                                <span className="text-xs text-muted-foreground">{hole.posV}</span>
+                              </div>
+                              <Slider
+                                min={0}
+                                max={100}
+                                step={1}
+                                value={hole.posV}
+                                onValueChange={(value) => updateLidCustomHole(hole.id, { posV: value })}
+                              />
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="space-y-2">
+                              <div className="flex justify-between items-center">
+                                <Label className="text-xs">Position — Width (%)</Label>
+                                <span className="text-xs text-muted-foreground">{hole.posU}</span>
+                              </div>
+                              <Slider
+                                min={0}
+                                max={100}
+                                step={1}
+                                value={hole.posU}
+                                onValueChange={(value) => updateLidCustomHole(hole.id, { posU: value })}
+                              />
+                            </div>
+
+                            <div className="space-y-2">
+                              <div className="flex justify-between items-center">
+                                <Label className="text-xs">Position — Depth (%)</Label>
+                                <span className="text-xs text-muted-foreground">{hole.posV}</span>
+                              </div>
+                              <Slider
+                                min={0}
+                                max={100}
+                                step={1}
+                                value={hole.posV}
+                                onValueChange={(value) => updateLidCustomHole(hole.id, { posV: value })}
+                              />
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  )
+                })()}
 
                 {/* Lid-only options */}
                 {params.lidStyle === 'lid' && !params.includeHinge && (

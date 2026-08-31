@@ -1,4 +1,4 @@
-import { BoxParams, clampDivisionThickness, LID_PATTERNS } from './boxGenerator'
+import { BoxParams, clampDivisionThickness, LID_PATTERNS, CUSTOM_HOLE_SHAPES, CUSTOM_HOLE_FACES, CustomHole, LidCustomHole } from './boxGenerator'
 
 export const DEFAULTS: BoxParams = {
   width: 80,
@@ -19,14 +19,23 @@ export const DEFAULTS: BoxParams = {
   lidPattern: 'none' as const,
   lidPatternSize: 8,
   lidPatternSpacing: 4,
+  lidPatternCoverageX: 100,
+  lidPatternCoverageY: 100,
+  lidPatternOffsetX: 0,
+  lidPatternOffsetY: 0,
   boxPattern: 'none' as const,
   boxPatternSize: 8,
   boxPatternSpacing: 4,
+  boxPatternDividers: false,
+  boxPatternSkipFloor: false,
+  customHoles: [],
+  lidCustomHoles: [],
   fingerSlotAxes: 'none' as const,
   fingerSlotWidth: 15,
   fingerSlotDepth: 15,
   fingerSlotPosition: 50,
   fingerSlotDividers: true,
+  fingerSlotOuterWalls: true,
   chamferSize: 0,
   includeHinge: false,
   hingeCount: 1,
@@ -96,6 +105,10 @@ export function normalizeParams(raw: unknown): BoxParams {
   if (!LID_PATTERNS.some(o => o.value === p.lidPattern)) p.lidPattern = 'none'
   p.lidPatternSize = Math.min(Math.max(Number(p.lidPatternSize) || 8, 2), 30)
   p.lidPatternSpacing = Math.min(Math.max(Number(p.lidPatternSpacing) || 4, 1.5), 20)
+  p.lidPatternCoverageX = Math.min(Math.max(Number(p.lidPatternCoverageX) || 100, 10), 100)
+  p.lidPatternCoverageY = Math.min(Math.max(Number(p.lidPatternCoverageY) || 100, 10), 100)
+  p.lidPatternOffsetX = Math.min(Math.max(Number(p.lidPatternOffsetX) || 0, -100), 100)
+  p.lidPatternOffsetY = Math.min(Math.max(Number(p.lidPatternOffsetY) || 0, -100), 100)
   if (!LID_PATTERNS.some(o => o.value === p.boxPattern)) p.boxPattern = 'none'
   p.boxPatternSize = Math.min(Math.max(Number(p.boxPatternSize) || 8, 2), 30)
   p.boxPatternSpacing = Math.min(Math.max(Number(p.boxPatternSpacing) || 4, 1.5), 20)
@@ -104,8 +117,54 @@ export function normalizeParams(raw: unknown): BoxParams {
   p.fingerSlotDepth = Math.min(Math.max(Number(p.fingerSlotDepth) || 15, 2), 200)
   p.fingerSlotPosition = Math.min(Math.max(Number(p.fingerSlotPosition) || 50, 0), 100)
   p.fingerSlotDividers = p.fingerSlotDividers !== false
+  p.fingerSlotOuterWalls = p.fingerSlotOuterWalls !== false
+  // If a project somehow ends up with both off, fall back to notching the
+  // outer walls rather than silently producing no notches at all.
+  if (!p.fingerSlotOuterWalls && !p.fingerSlotDividers) p.fingerSlotOuterWalls = true
+  p.boxPatternDividers = p.boxPatternDividers === true
+  p.boxPatternSkipFloor = p.boxPatternSkipFloor === true
   if (!Array.isArray(p.divisionsX)) p.divisionsX = []
   if (!Array.isArray(p.divisionsZ)) p.divisionsZ = []
+  p.customHoles = Array.isArray(p.customHoles)
+    ? p.customHoles.map((h): CustomHole | null => {
+        const raw = (h && typeof h === 'object' ? h : {}) as Partial<CustomHole>
+        if (!CUSTOM_HOLE_FACES.some(o => o.value === raw.face)) return null
+        if (!CUSTOM_HOLE_SHAPES.some(o => o.value === raw.shape)) return null
+        return {
+          id: typeof raw.id === 'string' && raw.id ? raw.id : Math.random().toString(36).slice(2, 10),
+          face: raw.face!,
+          shape: raw.shape!,
+          size: Math.min(Math.max(Number(raw.size) || 10, 1), 100),
+          useCustomSlotSize: raw.useCustomSlotSize === true,
+          slotWidth: Math.min(Math.max(Number(raw.slotWidth) || 20, 1), 200),
+          slotLength: Math.min(Math.max(Number(raw.slotLength) || 4.5, 1), 200),
+          cornerHoles: raw.cornerHoles === true,
+          cornerInsetX: Math.min(Math.max(Number(raw.cornerInsetX ?? (raw as any).cornerInset) || 8, 1), 200),
+          cornerInsetY: Math.min(Math.max(Number(raw.cornerInsetY ?? (raw as any).cornerInset) || 8, 1), 200),
+          posU: Math.min(Math.max(Number(raw.posU) ?? 50, 0), 100),
+          posV: Math.min(Math.max(Number(raw.posV) ?? 50, 0), 100),
+        }
+      }).filter((h): h is CustomHole => h !== null)
+    : []
+  p.lidCustomHoles = Array.isArray(p.lidCustomHoles)
+    ? p.lidCustomHoles.map((h): LidCustomHole | null => {
+        const raw = (h && typeof h === 'object' ? h : {}) as Partial<LidCustomHole>
+        if (!CUSTOM_HOLE_SHAPES.some(o => o.value === raw.shape)) return null
+        return {
+          id: typeof raw.id === 'string' && raw.id ? raw.id : Math.random().toString(36).slice(2, 10),
+          shape: raw.shape!,
+          size: Math.min(Math.max(Number(raw.size) || 10, 1), 100),
+          useCustomSlotSize: raw.useCustomSlotSize === true,
+          slotWidth: Math.min(Math.max(Number(raw.slotWidth) || 20, 1), 200),
+          slotLength: Math.min(Math.max(Number(raw.slotLength) || 4.5, 1), 200),
+          cornerHoles: raw.cornerHoles === true,
+          cornerInsetX: Math.min(Math.max(Number(raw.cornerInsetX ?? (raw as any).cornerInset) || 8, 1), 200),
+          cornerInsetY: Math.min(Math.max(Number(raw.cornerInsetY ?? (raw as any).cornerInset) || 8, 1), 200),
+          posU: Math.min(Math.max(Number(raw.posU) ?? 50, 0), 100),
+          posV: Math.min(Math.max(Number(raw.posV) ?? 50, 0), 100),
+        }
+      }).filter((h): h is LidCustomHole => h !== null)
+    : []
   return p
 }
 
