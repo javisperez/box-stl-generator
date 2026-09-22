@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { Label } from './ui/label'
-import { Slider } from './ui/slider'
+import { SliderField } from './ui/slider-field'
 import { Button } from './ui/button'
 import { Save, RotateCcw, ChevronDown, Trash2, FileDown, FileUp, AlertTriangle, CheckCircle2, Link2, Check, Archive } from 'lucide-react'
 import { BoxParams, sleeveOuterDims, LID_PATTERNS } from '@/utils/boxGenerator'
@@ -285,16 +285,15 @@ export function ControlPanel({
               {volumeExpanded && (
                 <div className="p-4 border-t space-y-4">
                   <div className="space-y-2">
-                    <div className="flex justify-between items-center">
-                      <Label>Volume (cm³)</Label>
-                      <span className="text-sm text-muted-foreground">{(volume / 1000).toFixed(1)}</span>
-                    </div>
-                    <Slider
+                    <SliderField
+                      label="Volume (cm³)"
                       min={100}
                       max={10000}
                       step={50}
                       value={volume}
-                      onValueChange={setVolume}
+                      onChange={setVolume}
+                      format={(v) => (v / 1000).toFixed(1)}
+                      parse={(s) => Number(s) * 1000}
                     />
                   </div>
 
@@ -352,30 +351,24 @@ export function ControlPanel({
                   </div>
 
                   <div className="space-y-2">
-                    <div className="flex justify-between items-center">
-                      <Label>Item Height (mm)</Label>
-                      <span className="text-sm text-muted-foreground">{itemHeight}</span>
-                    </div>
-                    <Slider
+                    <SliderField
+                      label="Item Height (mm)"
                       min={5}
                       max={50}
                       step={1}
                       value={itemHeight}
-                      onValueChange={setItemHeight}
+                      onChange={setItemHeight}
                     />
                   </div>
 
                   <div className="space-y-2">
-                    <div className="flex justify-between items-center">
-                      <Label>Number of Compartments</Label>
-                      <span className="text-sm text-muted-foreground">{compartmentCount}</span>
-                    </div>
-                    <Slider
+                    <SliderField
+                      label="Number of Compartments"
                       min={1}
                       max={16}
                       step={1}
                       value={compartmentCount}
-                      onValueChange={setCompartmentCount}
+                      onChange={setCompartmentCount}
                     />
                   </div>
 
@@ -430,16 +423,13 @@ export function ControlPanel({
                   </div>
 
                   <div className="space-y-2">
-                    <div className="flex justify-between items-center">
-                      <Label>Wall Thickness (mm)</Label>
-                      <span className="text-sm text-muted-foreground">{divisionWallThickness}</span>
-                    </div>
-                    <Slider
+                    <SliderField
+                      label="Wall Thickness (mm)"
                       min={1}
                       max={5}
                       step={0.5}
                       value={divisionWallThickness}
-                      onValueChange={setDivisionWallThickness}
+                      onChange={setDivisionWallThickness}
                     />
                     <p className="text-xs text-muted-foreground">
                       Used for both the outer walls and the dividers when generating.
@@ -485,44 +475,35 @@ export function ControlPanel({
         {activeTab === 'box' && (
           <div className="space-y-4">
             <div className="space-y-2">
-              <div className="flex justify-between items-center">
-                <Label>Width (mm)</Label>
-                <span className="text-sm text-muted-foreground">{params.width}</span>
-              </div>
-              <Slider
+              <SliderField
+                label="Width (mm)"
                 min={10}
-                max={200}
+                max={settings.printerBedX > 0 ? settings.printerBedX : 200}
                 step={0.5}
                 value={params.width}
-                onValueChange={(value) => updateParam('width', value)}
+                onChange={(value) => updateParam('width', value)}
               />
             </div>
 
             <div className="space-y-2">
-              <div className="flex justify-between items-center">
-                <Label>Depth (mm)</Label>
-                <span className="text-sm text-muted-foreground">{params.depth}</span>
-              </div>
-              <Slider
+              <SliderField
+                label="Depth (mm)"
                 min={10}
-                max={200}
+                max={settings.printerBedY > 0 ? settings.printerBedY : 200}
                 step={0.5}
                 value={params.depth}
-                onValueChange={(value) => updateParam('depth', value)}
+                onChange={(value) => updateParam('depth', value)}
               />
             </div>
 
             <div className="space-y-2">
-              <div className="flex justify-between items-center">
-                <Label>Height (mm)</Label>
-                <span className="text-sm text-muted-foreground">{params.height}</span>
-              </div>
-              <Slider
+              <SliderField
+                label="Height (mm)"
                 min={10}
                 max={200}
                 step={0.5}
                 value={params.height}
-                onValueChange={(value) => updateParam('height', value)}
+                onChange={(value) => updateParam('height', value)}
               />
             </div>
 
@@ -543,16 +524,13 @@ export function ControlPanel({
             </div>
 
             <div className="space-y-2">
-              <div className="flex justify-between items-center">
-                <Label>Wall Thickness (mm)</Label>
-                <span className="text-sm text-muted-foreground">{params.wallThickness}</span>
-              </div>
-              <Slider
+              <SliderField
+                label="Wall Thickness (mm)"
                 min={1}
                 max={10}
                 step={0.5}
                 value={params.wallThickness}
-                onValueChange={(value) => updateParam('wallThickness', value)}
+                onChange={(value) => updateParam('wallThickness', value)}
               />
               <p className="text-xs text-muted-foreground">
                 Thickness of the four outer walls and the floor. Increasing it keeps the outer size
@@ -561,16 +539,13 @@ export function ControlPanel({
             </div>
 
             <div className="space-y-2">
-              <div className="flex justify-between items-center">
-                <Label>Divider Thickness (mm)</Label>
-                <span className="text-sm text-muted-foreground">{params.divisionThickness}</span>
-              </div>
-              <Slider
+              <SliderField
+                label="Divider Thickness (mm)"
                 min={0.4}
                 max={params.wallThickness}
                 step={0.2}
                 value={params.divisionThickness}
-                onValueChange={(value) => updateParam('divisionThickness', value)}
+                onChange={(value) => updateParam('divisionThickness', value)}
               />
               <p className="text-xs text-muted-foreground">
                 Thickness of the internal divider walls. Capped at the outer wall thickness ({params.wallThickness} mm) so dividers are never thicker than the box itself.
@@ -578,16 +553,13 @@ export function ControlPanel({
             </div>
 
             <div className="space-y-2">
-              <div className="flex justify-between items-center">
-                <Label>Chamfer (mm)</Label>
-                <span className="text-sm text-muted-foreground">{params.chamferSize}</span>
-              </div>
-              <Slider
+              <SliderField
+                label="Chamfer (mm)"
                 min={0}
                 max={Math.min(params.wallThickness, params.width / 4, params.depth / 4)}
                 step={0.5}
                 value={params.chamferSize}
-                onValueChange={(value) => updateParam('chamferSize', value)}
+                onChange={(value) => updateParam('chamferSize', value)}
               />
               <p className="text-xs text-muted-foreground">
                 45° bevel on the four outer vertical edges. Cosmetic only — the interior is
@@ -596,16 +568,13 @@ export function ControlPanel({
             </div>
 
             <div className="space-y-2">
-              <div className="flex justify-between items-center">
-                <Label>X Divisions</Label>
-                <span className="text-sm text-muted-foreground">{params.divisionsX.length}</span>
-              </div>
-              <Slider
+              <SliderField
+                label="X Divisions"
                 min={0}
                 max={10}
                 step={1}
                 value={params.divisionsX.length}
-                onValueChange={(value) => setDivisionCount('divisionsX', value)}
+                onChange={(value) => setDivisionCount('divisionsX', value)}
               />
               <p className="text-xs text-muted-foreground">
                 Vertical walls that split the interior along the width. Each position is a % across
@@ -614,18 +583,15 @@ export function ControlPanel({
               </p>
               {params.divisionsX.map((pos, i) => (
                 <div key={i} className="space-y-1 pl-4">
-                  <div className="flex justify-between items-center">
-                    <Label className="text-xs">X Divider {i + 1} (%)</Label>
-                    <span className="text-xs text-muted-foreground">
-                      {pos}% · {fmt((pos / 100) * innerW)} mm
-                    </span>
-                  </div>
-                  <Slider
+                  <SliderField
+                    labelClassName="text-xs"
+                    label={`X Divider ${i + 1} (%)`}
                     min={1}
                     max={99}
                     step={1}
                     value={pos}
-                    onValueChange={(value) => setDivisionPosition('divisionsX', i, value)}
+                    onChange={(value) => setDivisionPosition('divisionsX', i, value)}
+                    suffix={<span className="text-xs text-muted-foreground">% · {fmt((pos / 100) * innerW)} mm</span>}
                   />
                 </div>
               ))}
@@ -638,16 +604,13 @@ export function ControlPanel({
             </div>
 
             <div className="space-y-2">
-              <div className="flex justify-between items-center">
-                <Label>Z Divisions</Label>
-                <span className="text-sm text-muted-foreground">{params.divisionsZ.length}</span>
-              </div>
-              <Slider
+              <SliderField
+                label="Z Divisions"
                 min={0}
                 max={10}
                 step={1}
                 value={params.divisionsZ.length}
-                onValueChange={(value) => setDivisionCount('divisionsZ', value)}
+                onChange={(value) => setDivisionCount('divisionsZ', value)}
               />
               <p className="text-xs text-muted-foreground">
                 Walls that split the interior along the depth. Each position is a % across the
@@ -656,18 +619,15 @@ export function ControlPanel({
               </p>
               {params.divisionsZ.map((pos, i) => (
                 <div key={i} className="space-y-1 pl-4">
-                  <div className="flex justify-between items-center">
-                    <Label className="text-xs">Z Divider {i + 1} (%)</Label>
-                    <span className="text-xs text-muted-foreground">
-                      {pos}% · {fmt((pos / 100) * innerD)} mm
-                    </span>
-                  </div>
-                  <Slider
+                  <SliderField
+                    labelClassName="text-xs"
+                    label={`Z Divider ${i + 1} (%)`}
                     min={1}
                     max={99}
                     step={1}
                     value={pos}
-                    onValueChange={(value) => setDivisionPosition('divisionsZ', i, value)}
+                    onChange={(value) => setDivisionPosition('divisionsZ', i, value)}
+                    suffix={<span className="text-xs text-muted-foreground">% · {fmt((pos / 100) * innerD)} mm</span>}
                   />
                 </div>
               ))}
@@ -721,45 +681,36 @@ export function ControlPanel({
                     </label>
                   )}
                   <div className="space-y-2">
-                    <div className="flex justify-between items-center">
-                      <Label>Slot Width (mm)</Label>
-                      <span className="text-sm text-muted-foreground">{params.fingerSlotWidth}</span>
-                    </div>
-                    <Slider
+                    <SliderField
+                      label="Slot Width (mm)"
                       min={5}
                       max={60}
                       step={1}
                       value={params.fingerSlotWidth}
-                      onValueChange={(value) => updateParam('fingerSlotWidth', value)}
+                      onChange={(value) => updateParam('fingerSlotWidth', value)}
                     />
                   </div>
                   <div className="space-y-2">
-                    <div className="flex justify-between items-center">
-                      <Label>Slot Depth (mm)</Label>
-                      <span className="text-sm text-muted-foreground">{params.fingerSlotDepth}</span>
-                    </div>
-                    <Slider
+                    <SliderField
+                      label="Slot Depth (mm)"
                       min={2}
                       max={Math.max(2, params.height - params.wallThickness - 0.5)}
                       step={0.5}
                       value={params.fingerSlotDepth}
-                      onValueChange={(value) => updateParam('fingerSlotDepth', value)}
+                      onChange={(value) => updateParam('fingerSlotDepth', value)}
                     />
                     <p className="text-xs text-muted-foreground">
                       How far down from the top edge the notch reaches. It always stops just above the floor.
                     </p>
                   </div>
                   <div className="space-y-2">
-                    <div className="flex justify-between items-center">
-                      <Label>Slot Position (%)</Label>
-                      <span className="text-sm text-muted-foreground">{params.fingerSlotPosition}</span>
-                    </div>
-                    <Slider
+                    <SliderField
+                      label="Slot Position (%)"
                       min={0}
                       max={100}
                       step={1}
                       value={params.fingerSlotPosition}
-                      onValueChange={(value) => updateParam('fingerSlotPosition', value)}
+                      onChange={(value) => updateParam('fingerSlotPosition', value)}
                     />
                     <p className="text-xs text-muted-foreground">
                       Where each notch sits along its open span — 50% is centred. With crossing
@@ -791,29 +742,23 @@ export function ControlPanel({
               {params.boxPattern !== 'none' && (
                 <div className="space-y-4 pt-1">
                   <div className="space-y-2">
-                    <div className="flex justify-between items-center">
-                      <Label>Cutout Size (mm)</Label>
-                      <span className="text-sm text-muted-foreground">{params.boxPatternSize}</span>
-                    </div>
-                    <Slider
+                    <SliderField
+                      label="Cutout Size (mm)"
                       min={3}
                       max={25}
                       step={0.5}
                       value={params.boxPatternSize}
-                      onValueChange={(value) => updateParam('boxPatternSize', value)}
+                      onChange={(value) => updateParam('boxPatternSize', value)}
                     />
                   </div>
                   <div className="space-y-2">
-                    <div className="flex justify-between items-center">
-                      <Label>Cutout Spacing (mm)</Label>
-                      <span className="text-sm text-muted-foreground">{params.boxPatternSpacing}</span>
-                    </div>
-                    <Slider
+                    <SliderField
+                      label="Cutout Spacing (mm)"
                       min={2}
                       max={15}
                       step={0.5}
                       value={params.boxPatternSpacing}
-                      onValueChange={(value) => updateParam('boxPatternSpacing', value)}
+                      onChange={(value) => updateParam('boxPatternSpacing', value)}
                     />
                     <p className="text-xs text-muted-foreground">
                       Wider spacing means a stronger part; larger cutouts save more filament.
@@ -887,16 +832,13 @@ export function ControlPanel({
 
                 {showTolerance && (
                   <div className="space-y-2">
-                    <div className="flex justify-between items-center">
-                      <Label>Fit Tolerance (mm)</Label>
-                      <span className="text-sm text-muted-foreground">{toleranceValue}</span>
-                    </div>
-                    <Slider
+                    <SliderField
+                      label="Fit Tolerance (mm)"
                       min={0.1}
                       max={1}
                       step={0.05}
                       value={toleranceValue}
-                      onValueChange={(value) => updateParam(isSleeveStyle ? 'sleeveTolerance' : 'lidTolerance', value)}
+                      onChange={(value) => updateParam(isSleeveStyle ? 'sleeveTolerance' : 'lidTolerance', value)}
                     />
                     <p className="text-xs text-muted-foreground">
                       {isSleeveStyle
@@ -930,29 +872,23 @@ export function ControlPanel({
                   {params.lidPattern !== 'none' && (
                     <div className="space-y-4 pt-1">
                       <div className="space-y-2">
-                        <div className="flex justify-between items-center">
-                          <Label>Cutout Size (mm)</Label>
-                          <span className="text-sm text-muted-foreground">{params.lidPatternSize}</span>
-                        </div>
-                        <Slider
+                        <SliderField
+                          label="Cutout Size (mm)"
                           min={3}
                           max={25}
                           step={0.5}
                           value={params.lidPatternSize}
-                          onValueChange={(value) => updateParam('lidPatternSize', value)}
+                          onChange={(value) => updateParam('lidPatternSize', value)}
                         />
                       </div>
                       <div className="space-y-2">
-                        <div className="flex justify-between items-center">
-                          <Label>Cutout Spacing (mm)</Label>
-                          <span className="text-sm text-muted-foreground">{params.lidPatternSpacing}</span>
-                        </div>
-                        <Slider
+                        <SliderField
+                          label="Cutout Spacing (mm)"
                           min={2}
                           max={15}
                           step={0.5}
                           value={params.lidPatternSpacing}
-                          onValueChange={(value) => updateParam('lidPatternSpacing', value)}
+                          onChange={(value) => updateParam('lidPatternSpacing', value)}
                         />
                         <p className="text-xs text-muted-foreground">
                           Wider spacing means a stronger part; larger cutouts save more filament.
@@ -965,16 +901,13 @@ export function ControlPanel({
                 {/* Lid-only options */}
                 {params.lidStyle === 'lid' && !params.includeHinge && (
                   <div className="space-y-2">
-                    <div className="flex justify-between items-center">
-                      <Label>Lip Height (mm)</Label>
-                      <span className="text-sm text-muted-foreground">{params.lidHeight}</span>
-                    </div>
-                    <Slider
+                    <SliderField
+                      label="Lip Height (mm)"
                       min={2}
                       max={20}
                       step={0.5}
                       value={params.lidHeight}
-                      onValueChange={(value) => updateParam('lidHeight', value)}
+                      onChange={(value) => updateParam('lidHeight', value)}
                     />
                     <p className="text-xs text-muted-foreground">
                       How far the lid's inner lip reaches down into the box. A taller lip grips
@@ -1000,30 +933,24 @@ export function ControlPanel({
                     {params.includeHinge && (
                       <div className="space-y-4 pl-2">
                         <div className="space-y-2">
-                          <div className="flex justify-between items-center">
-                            <Label>Number of hinges</Label>
-                            <span className="text-sm text-muted-foreground">{params.hingeCount}</span>
-                          </div>
-                          <Slider
+                          <SliderField
+                            label="Number of hinges"
                             min={1}
                             max={3}
                             step={1}
                             value={params.hingeCount}
-                            onValueChange={(value) => updateParam('hingeCount', value)}
+                            onChange={(value) => updateParam('hingeCount', value)}
                           />
                         </div>
 
                         <div className="space-y-2">
-                          <div className="flex justify-between items-center">
-                            <Label>Barrel diameter (mm)</Label>
-                            <span className="text-sm text-muted-foreground">{params.hingeDiameter}</span>
-                          </div>
-                          <Slider
+                          <SliderField
+                            label="Barrel diameter (mm)"
                             min={6}
                             max={14}
                             step={0.5}
                             value={params.hingeDiameter}
-                            onValueChange={(value) => updateParam('hingeDiameter', value)}
+                            onChange={(value) => updateParam('hingeDiameter', value)}
                           />
                           <p className="text-xs text-muted-foreground">
                             Outer diameter of the hinge knuckles on the box's back edge.
@@ -1031,16 +958,13 @@ export function ControlPanel({
                         </div>
 
                         <div className="space-y-2">
-                          <div className="flex justify-between items-center">
-                            <Label>Axle diameter (mm)</Label>
-                            <span className="text-sm text-muted-foreground">{params.hingePinDiameter}</span>
-                          </div>
-                          <Slider
+                          <SliderField
+                            label="Axle diameter (mm)"
                             min={2}
                             max={5}
                             step={0.5}
                             value={params.hingePinDiameter}
-                            onValueChange={(value) => updateParam('hingePinDiameter', value)}
+                            onChange={(value) => updateParam('hingePinDiameter', value)}
                           />
                           <p className="text-xs text-muted-foreground">
                             Diameter of the snap axles on the lid knuckle. Thicker is stronger but needs more force to click in.
@@ -1096,30 +1020,24 @@ export function ControlPanel({
                   </div>
 
                   <div className="space-y-2">
-                    <div className="flex justify-between items-center">
-                      <Label>Text Size (mm)</Label>
-                      <span className="text-sm text-muted-foreground">{params.lidTextSize}</span>
-                    </div>
-                    <Slider
+                    <SliderField
+                      label="Text Size (mm)"
                       min={8}
                       max={40}
                       step={1}
                       value={params.lidTextSize}
-                      onValueChange={(value) => updateParam('lidTextSize', value)}
+                      onChange={(value) => updateParam('lidTextSize', value)}
                     />
                   </div>
 
                   <div className="space-y-2">
-                    <div className="flex justify-between items-center">
-                      <Label>Text Depth (mm)</Label>
-                      <span className="text-sm text-muted-foreground">{params.lidTextDepth}</span>
-                    </div>
-                    <Slider
+                    <SliderField
+                      label="Text Depth (mm)"
                       min={0.3}
                       max={2}
                       step={0.1}
                       value={params.lidTextDepth}
-                      onValueChange={(value) => updateParam('lidTextDepth', value)}
+                      onChange={(value) => updateParam('lidTextDepth', value)}
                     />
                   </div>
 
