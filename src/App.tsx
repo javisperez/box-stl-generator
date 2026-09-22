@@ -427,6 +427,17 @@ function App() {
           >
             Source on GitHub
           </a>
+          <div className="mt-2">
+            <a href="https://ko-fi.com/G0U727FZNX" target="_blank" rel="noopener noreferrer">
+              <img
+                height={36}
+                style={{ border: 0, height: 36 }}
+                src="https://storage.ko-fi.com/cdn/kofi6.png?v=6"
+                alt="Buy Me a Coffee at ko-fi.com"
+                className="inline-block"
+              />
+            </a>
+          </div>
         </footer>
       </aside>
     </div>
