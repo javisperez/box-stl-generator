@@ -92,6 +92,73 @@ export function ControlPanel({
     onParamsChange(next)
   }
 
+  // ── Interior-dimension entry mode ───────────────────────────────────────────
+  // width/depth/height always store the box's OUTER size (the generator never
+  // sees dimensionMode/interiorTolerance). In 'interior' mode the Box tab's
+  // sliders instead show/edit the target interior cavity size — the outer size
+  // is derived so that cavity = entered value + tolerance. Sides lose two
+  // walls; height only loses the floor (the top is open).
+  const isInteriorMode = params.dimensionMode === 'interior'
+  const wallTerm = (axis: 'width' | 'depth' | 'height') => axis === 'height' ? params.wallThickness : 2 * params.wallThickness
+  // Keep stored dims at a sane precision — repeated +/- deltas across mode
+  // switches otherwise accumulate binary floating-point noise (e.g. 91.59999999999985)
+  const round2 = (n: number) => Math.round(n * 100) / 100
+
+  const dimensionDisplayValue = (axis: 'width' | 'depth' | 'height') =>
+    isInteriorMode
+      ? Math.max(0, round2(params[axis] - wallTerm(axis) - params.interiorTolerance))
+      : params[axis]
+
+  const setDimension = (axis: 'width' | 'depth' | 'height', displayValue: number) => {
+    updateParam(axis, isInteriorMode ? round2(displayValue + wallTerm(axis) + params.interiorTolerance) : displayValue)
+  }
+
+  // Wall thickness eats into the interior — in interior mode, grow the outer
+  // size along with it so the content-size target the user set stays fit.
+  const setWallThickness = (value: number) => {
+    const deltaWt = value - params.wallThickness
+    const next = { ...params, wallThickness: value }
+    next.divisionThickness = Math.min(next.divisionThickness, value)
+    if (isInteriorMode) {
+      next.width = round2(params.width + 2 * deltaWt)
+      next.depth = round2(params.depth + 2 * deltaWt)
+      next.height = round2(params.height + deltaWt)
+    }
+    onParamsChange(next)
+  }
+
+  // Changing the fit tolerance shifts the outer size by the same delta on
+  // every axis, keeping the interior target (the value shown in the field)
+  // unchanged while the cavity itself tightens or loosens.
+  const setInteriorTolerance = (value: number) => {
+    const deltaTol = value - params.interiorTolerance
+    onParamsChange({
+      ...params,
+      interiorTolerance: value,
+      width: round2(params.width + deltaTol),
+      depth: round2(params.depth + deltaTol),
+      height: round2(params.height + deltaTol),
+    })
+  }
+
+  // Entering interior mode loosens the box by the tolerance (so the cavity
+  // reads back exactly what you'd type in); leaving it strips that same gap
+  // back out, so a plain "Exterior" box never carries a leftover fit-tolerance
+  // gap it can't account for. The two are exact inverses, so toggling back
+  // and forth without touching anything else is lossless.
+  const setDimensionMode = (mode: 'exterior' | 'interior') => {
+    if (mode === params.dimensionMode) return
+    const sign = mode === 'interior' ? 1 : -1
+    const tol = params.interiorTolerance
+    onParamsChange({
+      ...params,
+      dimensionMode: mode,
+      width: Math.max(1, round2(params.width + sign * tol)),
+      depth: Math.max(1, round2(params.depth + sign * tol)),
+      height: Math.max(1, round2(params.height + sign * tol)),
+    })
+  }
+
   const setDivisionCount = (axis: 'divisionsX' | 'divisionsZ', count: number) => {
     onParamsChange({ ...params, [axis]: evenPositions(count) })
   }
@@ -475,43 +542,94 @@ export function ControlPanel({
         {activeTab === 'box' && (
           <div className="space-y-4">
             <div className="space-y-2">
+              <Label>Dimensions are</Label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  className={`px-3 py-1.5 text-sm rounded-md border ${!isInteriorMode ? 'bg-primary text-primary-foreground' : 'bg-background'}`}
+                  onClick={() => setDimensionMode('exterior')}
+                >
+                  Exterior
+                </button>
+                <button
+                  className={`px-3 py-1.5 text-sm rounded-md border ${isInteriorMode ? 'bg-primary text-primary-foreground' : 'bg-background'}`}
+                  onClick={() => setDimensionMode('interior')}
+                >
+                  Interior (fit contents)
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+                <p>The outer size — walls are included in it, nothing gets added on top.</p>
+                <p>Measured your contents? Enter that size — walls get added on top to fit it.</p>
+              </div>
+            </div>
+
+            {isInteriorMode && (
+              <div className="space-y-2">
+                <SliderField
+                  label="Tolerance (mm)"
+                  min={0}
+                  max={10}
+                  step={0.1}
+                  value={params.interiorTolerance}
+                  onChange={setInteriorTolerance}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Extra clearance added to the cavity on top of the size you enter — raise it if the
+                  contents should sit loose, lower it (even to 0) for a snug fit.
+                </p>
+              </div>
+            )}
+
+            <div className="space-y-2">
               <SliderField
-                label="Width (mm)"
-                min={10}
-                max={settings.printerBedX > 0 ? settings.printerBedX : 200}
+                label={isInteriorMode ? 'Width, interior (mm)' : 'Width (mm)'}
+                min={isInteriorMode ? 1 : 10}
+                max={isInteriorMode
+                  ? Math.max(1, (settings.printerBedX > 0 ? settings.printerBedX : 200) - wallTerm('width') - params.interiorTolerance)
+                  : (settings.printerBedX > 0 ? settings.printerBedX : 200)}
                 step={0.5}
-                value={params.width}
-                onChange={(value) => updateParam('width', value)}
+                value={dimensionDisplayValue('width')}
+                onChange={(value) => setDimension('width', value)}
               />
             </div>
 
             <div className="space-y-2">
               <SliderField
-                label="Depth (mm)"
-                min={10}
-                max={settings.printerBedY > 0 ? settings.printerBedY : 200}
+                label={isInteriorMode ? 'Depth, interior (mm)' : 'Depth (mm)'}
+                min={isInteriorMode ? 1 : 10}
+                max={isInteriorMode
+                  ? Math.max(1, (settings.printerBedY > 0 ? settings.printerBedY : 200) - wallTerm('depth') - params.interiorTolerance)
+                  : (settings.printerBedY > 0 ? settings.printerBedY : 200)}
                 step={0.5}
-                value={params.depth}
-                onChange={(value) => updateParam('depth', value)}
+                value={dimensionDisplayValue('depth')}
+                onChange={(value) => setDimension('depth', value)}
               />
             </div>
 
             <div className="space-y-2">
               <SliderField
-                label="Height (mm)"
-                min={10}
-                max={200}
+                label={isInteriorMode ? 'Height, interior (mm)' : 'Height (mm)'}
+                min={isInteriorMode ? 1 : 10}
+                max={isInteriorMode ? Math.max(1, 200 - wallTerm('height') - params.interiorTolerance) : 200}
                 step={0.5}
-                value={params.height}
-                onChange={(value) => updateParam('height', value)}
+                value={dimensionDisplayValue('height')}
+                onChange={(value) => setDimension('height', value)}
               />
             </div>
 
             <div className="p-3 bg-muted rounded text-xs text-muted-foreground space-y-1">
-              <p>
-                Width, depth and height are <strong>outer</strong> dimensions — the walls are
-                included in them, not added on top.
-              </p>
+              {isInteriorMode ? (
+                <p>
+                  Outer size comes out to <strong>{fmt(params.width)} × {fmt(params.depth)} × {fmt(params.height)} mm</strong>{' '}
+                  (W × D × H) — the {fmt(params.wallThickness)} mm walls and the {params.interiorTolerance} mm
+                  tolerance are added on top of the cavity size you entered.
+                </p>
+              ) : (
+                <p>
+                  Width, depth and height are <strong>outer</strong> dimensions — the walls are
+                  included in them, not added on top.
+                </p>
+              )}
               <p>
                 Usable interior: <strong>{fmt(innerW)} × {fmt(innerD)} × {fmt(innerH)} mm</strong>{' '}
                 (W × D × H). The sides lose two {params.wallThickness} mm walls; the height loses
@@ -530,11 +648,13 @@ export function ControlPanel({
                 max={10}
                 step={0.5}
                 value={params.wallThickness}
-                onChange={(value) => updateParam('wallThickness', value)}
+                onChange={setWallThickness}
               />
               <p className="text-xs text-muted-foreground">
-                Thickness of the four outer walls and the floor. Increasing it keeps the outer size
-                the same and shrinks the interior.
+                Thickness of the four outer walls and the floor.{' '}
+                {isInteriorMode
+                  ? 'In interior mode the outer size grows or shrinks with it, so the cavity size above stays put.'
+                  : 'Increasing it keeps the outer size the same and shrinks the interior.'}
               </p>
             </div>
 

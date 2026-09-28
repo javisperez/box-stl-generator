@@ -4,6 +4,44 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 with date-based entries since the project has no version releases.
 
+## 2026-09-28
+
+### Changed
+- **Switching dimension mode now adds/strips the fit tolerance instead of
+  leaving it baked in.** Entering Interior mode loosens the current box by
+  the tolerance amount (so the cavity field reads back exactly what you'd
+  expect); leaving it strips that same gap back out, so an "Exterior" box
+  never carries a leftover fit-tolerance gap it has no control for. The two
+  are exact inverses — toggling back and forth without touching anything
+  else is lossless.
+
+### Fixed
+- **Exterior mode's Width/Depth/Height sliders were capped too low.** Their
+  max bound kept subtracting the wall thickness and interior tolerance even
+  after switching out of interior mode, so the outer size couldn't be pushed
+  past roughly `plate size − walls − tolerance`. Those terms now only apply
+  to the slider bounds while interior mode is active; exterior mode's max is
+  the plain plate size again.
+- **Floating-point drift in the interior-mode outer size.** Repeated
+  tolerance/wall-thickness edits in interior mode nudged width/depth/height
+  by small deltas that accumulated binary rounding error (e.g.
+  `126.89999999999988` instead of `126.9`). Those derived values are now
+  rounded to 2 decimals, and the on-canvas dimension readout is formatted to
+  1 decimal as a safety net.
+
+### Added
+- **Interior-dimension entry mode.** A new "Dimensions are" toggle on the Box
+  tab switches Width/Depth/Height between the existing outer-size entry and a
+  new interior mode, where the fields are the target cavity size (e.g. a
+  measured deck of cards) and the outer size is computed for you — no more
+  boxes coming out exactly content-sized with nothing left for the walls. A
+  paired Tolerance slider (default 0.3 mm) adds extra clearance on top of the
+  entered size to loosen or tighten the fit; changing it, or the wall
+  thickness, in interior mode keeps the entered cavity size fixed and adjusts
+  the outer size instead. `width`/`depth`/`height` in saved projects always
+  remain the outer size — the mode and tolerance are stored alongside them
+  and only affect how the Box tab fields are entered.
+
 ## 2026-07-20
 
 ### Fixed

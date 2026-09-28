@@ -292,7 +292,7 @@ function App() {
           />
         </div>
         <div className="absolute top-4 left-4 bg-black/60 text-white text-xs font-mono px-2.5 py-1.5 rounded-md pointer-events-none">
-          {params.width} × {params.depth} × {params.height} mm
+          {fmt(params.width)} × {fmt(params.depth)} × {fmt(params.height)} mm
         </div>
         <div className="hidden sm:block absolute top-4 right-4 text-white/40 text-xs pointer-events-none">
           drag to rotate · scroll to zoom
