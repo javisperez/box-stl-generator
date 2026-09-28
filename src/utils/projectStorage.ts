@@ -4,6 +4,8 @@ export const DEFAULTS: BoxParams = {
   width: 80,
   depth: 60,
   height: 40,
+  dimensionMode: 'exterior' as const,
+  interiorTolerance: 0.3,
   wallThickness: 2,
   includeLid: false,
   lidHeight: 5,
@@ -92,6 +94,8 @@ export function normalizeParams(raw: unknown): BoxParams {
   if (src.divisionThickness == null) p.divisionThickness = p.wallThickness
   p.divisionThickness = clampDivisionThickness(p.divisionThickness, p.wallThickness)
   if (p.lidStyle !== 'sleeve') p.lidStyle = 'lid'
+  if (p.dimensionMode !== 'interior') p.dimensionMode = 'exterior'
+  p.interiorTolerance = Math.min(Math.max(Number(p.interiorTolerance) || 0, 0), 20)
   if (![0, 90, 180, 270].includes(p.lidTextRotation)) p.lidTextRotation = 0
   if (!LID_PATTERNS.some(o => o.value === p.lidPattern)) p.lidPattern = 'none'
   p.lidPatternSize = Math.min(Math.max(Number(p.lidPatternSize) || 8, 2), 30)

@@ -26,6 +26,8 @@ export interface BoxParams {
   width: number
   depth: number
   height: number
+  dimensionMode: 'exterior' | 'interior' // UI-only: how the Box tab's W/D/H fields are entered — width/depth/height always store the outer size
+  interiorTolerance: number // UI-only: extra clearance added to the interior cavity when dimensionMode is 'interior'
   wallThickness: number
   includeLid: boolean
   lidHeight: number      // height of the lip that hangs into the box
