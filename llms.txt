@@ -7,7 +7,7 @@
 > there is no backend, no server-side rendering, no API calls.
 
 Live app: https://javisperez.github.io/box-stl-generator/
-License: Mozilla Public License 2.0 (see LICENSE)
+License: Apache License 2.0 (see LICENSE and NOTICE)
 
 ## Setup
 

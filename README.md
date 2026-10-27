@@ -89,4 +89,12 @@ Notable changes are documented in the [CHANGELOG](CHANGELOG.md).
 
 ## License
 
-This project is licensed under the [Mozilla Public License 2.0](LICENSE).
+This project is licensed under the [Apache License 2.0](LICENSE).
+
+If you redistribute this software, modified or not, you must keep the
+attribution in the [NOTICE](NOTICE) file (or reproduce it in your
+documentation or app), include a copy of the license, and state any changes
+you made to the files.
+
+Versions published before 2026-10-27 were released under the Mozilla Public
+License 2.0 and remain available under those terms.

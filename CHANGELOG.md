@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 with date-based entries since the project has no version releases.
 
+## 2026-10-27
+
+### Changed
+- **Relicensed from MPL 2.0 to Apache 2.0.** Added the standard Apache 2.0
+  `LICENSE` and a `NOTICE` file carrying the project's attribution, which
+  anyone redistributing the software must preserve. `package.json` now
+  declares the license and author. Versions published before this date stay
+  available under MPL 2.0.
+
 ## 2026-09-28
 
 ### Changed
