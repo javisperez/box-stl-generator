@@ -1,7 +1,5 @@
 @import "tailwindcss";
 
-@custom-variant dark (&:is(.dark *));
-
 @theme inline {
   --color-background: hsl(var(--background));
   --color-foreground: hsl(var(--foreground));
@@ -29,48 +27,27 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
-    --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
+    color-scheme: dark;
+    --background: 225 14% 6%;
+    --foreground: 225 17% 92%;
+    --card: 225 18% 9%;
+    --card-foreground: 225 17% 92%;
+    --popover: 223 16% 11%;
+    --popover-foreground: 225 17% 92%;
+    --primary: 10 100% 65%;
+    --primary-foreground: 15 55% 7%;
+    --secondary: 222 17% 12%;
+    --secondary-foreground: 225 17% 92%;
+    --muted: 222 17% 12%;
+    --muted-foreground: 223 9% 59%;
+    --accent: 222 15% 15%;
+    --accent-foreground: 225 17% 96%;
+    --destructive: 0 72% 55%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 222 13% 16%;
+    --input: 222 13% 20%;
+    --ring: 10 100% 65%;
     --radius: 0.5rem;
-  }
-
-  .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 210 40% 98%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 212.7 26.8% 83.9%;
   }
 
   * {
@@ -80,4 +57,44 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* Range sliders: the filled part of the track and the thumb ring take --c
+   (set per slider); --p is the fill percentage. */
+input[type='range'].slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    var(--c, hsl(var(--primary))) var(--p, 50%),
+    hsl(var(--input)) var(--p, 50%)
+  );
+  outline: none;
+}
+input[type='range'].slider::-webkit-slider-runnable-track {
+  height: 4px;
+  background: transparent;
+}
+input[type='range'].slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 50%;
+  background: #fff;
+  border: 3px solid var(--c, hsl(var(--primary)));
+  cursor: pointer;
+}
+input[type='range'].slider::-moz-range-thumb {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fff;
+  border: 3px solid var(--c, hsl(var(--primary)));
+  cursor: pointer;
+}
+input[type='range'].slider:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px hsl(var(--ring) / 0.35);
 }

@@ -1,21 +1,27 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { Label } from './label'
+import { Info } from 'lucide-react'
 import { Slider } from './slider'
 
 interface SliderFieldProps {
   label: ReactNode
-  labelClassName?: string
   value: number
   min: number
   max: number
   step?: number
   onChange: (value: number) => void
+  /** Unit shown after the number, e.g. "mm". */
+  unit?: string
+  /** Colour of the slider fill and thumb (defaults to the theme accent). */
+  color?: string
+  /** Short explanation, shown as a tooltip on an info icon next to the label. */
+  hint?: string
   /** Convert the raw value to what the text input shows (defaults to the plain number). */
   format?: (value: number) => string
   /** Convert typed text back to a raw value (defaults to Number(text)). */
   parse?: (text: string) => number
   /** Extra content rendered right after the input, e.g. a computed "· 12.3 mm" readout. */
   suffix?: ReactNode
+  className?: string
 }
 
 /**
@@ -25,15 +31,18 @@ interface SliderFieldProps {
  */
 export function SliderField({
   label,
-  labelClassName,
   value,
   min,
   max,
   step = 1,
   onChange,
+  unit,
+  color,
+  hint,
   format,
   parse,
   suffix,
+  className,
 }: SliderFieldProps) {
   const toText = format ?? ((v: number) => String(v))
   const fromText = parse ?? ((s: string) => Number(s))
@@ -56,10 +65,17 @@ export function SliderField({
   }
 
   return (
-    <>
+    <div className={className}>
       <div className="flex justify-between items-center gap-2">
-        <Label className={labelClassName}>{label}</Label>
-        <div className="flex items-center gap-1 shrink-0">
+        <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          {label}
+          {hint && (
+            <span title={hint} aria-label={hint} className="opacity-60 hover:opacity-100 cursor-help">
+              <Info className="h-3 w-3" />
+            </span>
+          )}
+        </span>
+        <div className="flex items-center gap-1 shrink-0 font-mono text-xs text-muted-foreground">
           <input
             type="number"
             inputMode="decimal"
@@ -75,12 +91,13 @@ export function SliderField({
                 e.currentTarget.blur()
               }
             }}
-            className="w-16 px-1.5 py-0.5 text-sm text-right rounded border bg-background text-muted-foreground focus:text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+            className="w-14 px-1 py-0.5 text-right text-foreground bg-transparent rounded border border-transparent hover:border-input focus:border-ring focus:outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
           />
+          {unit && <span>{unit}</span>}
           {suffix}
         </div>
       </div>
-      <Slider min={min} max={max} step={step} value={value} onValueChange={onChange} />
-    </>
+      <Slider className="mt-1.5" min={min} max={max} step={step} value={value} color={color} onValueChange={onChange} />
+    </div>
   )
 }

@@ -46,11 +46,16 @@ export interface BoxParams {
   boxPattern: LidPattern       // cutout pattern through the box's 4 outer side walls
   boxPatternSize: number       // feature size across, in mm
   boxPatternSpacing: number    // gap between features, in mm
+  boxPatternFloor: boolean     // also cut the pattern through the floor (off = keep the base flat and solid)
+  boxPatternDividers: boolean  // also cut the pattern through the divider walls
   fingerSlotAxes: FingerSlotAxes // finger-access notches cut down from the top edge
   fingerSlotWidth: number      // notch width along the wall, in mm
   fingerSlotDepth: number      // how far down from the top edge, in mm
   fingerSlotPosition: number   // notch centre as % along each open span (50 = centred)
   fingerSlotDividers: boolean  // also notch divider walls, not just the outer walls
+  fingerSlotWalls: boolean     // notch the outer walls (off = notch the dividers only)
+  fingerSlotRound: boolean     // round the bottom of each notch (U-shaped) instead of cutting it square
+  dividerHeight: number        // divider height above the floor in mm; 0 = full height (flush with the rim)
   chamferSize: number        // 45° chamfer on outer vertical edges (0 = none)
   includeHinge: boolean
   hingeCount: number         // number of hinges along the back edge (1–3)
@@ -67,6 +72,34 @@ export function clampDivisionThickness(divisionThickness: number, wallThickness:
   return Math.min(Math.max(dt, 0.4), wallThickness)
 }
 
+// The hinge flag lingers in saved settings after the closure changes to none
+// or a sleeve, so "is there a hinge" must also check the lid itself. Only a
+// real hinged lid keeps the box's back wall solid for the knuckle arms.
+export function hasHinge(params: BoxParams): boolean {
+  return params.includeLid && params.lidStyle === 'lid' && params.includeHinge
+}
+
+// Effective divider height above the floor. Anything 0, invalid, or not below
+// the rim means full height — the default, which is flush with the box top.
+export function dividerHeightMm(params: BoxParams): number {
+  const full = params.height - params.wallThickness
+  const dh = Number(params.dividerHeight)
+  if (!Number.isFinite(dh) || dh <= 0 || dh >= full - 0.01) return full
+  return Math.max(dh, 1)
+}
+
+export function dividersLowered(params: BoxParams): boolean {
+  return dividerHeightMm(params) < params.height - params.wallThickness
+}
+
+// A friction lid's lip hangs down from the rim. Dividers shorter than the lip
+// bottom never touch it, so the lip needs no notches for them.
+function dividersReachLip(params: BoxParams): boolean {
+  if (!dividersLowered(params)) return true
+  const lip = hasHinge(params) ? 0 : Math.min(params.lidHeight, params.height - params.wallThickness)
+  return params.wallThickness + dividerHeightMm(params) > params.height - lip + 0.01
+}
+
 // Direct geometry construction — no CSG, guaranteed manifold
 export function generateBox(params: BoxParams) {
   const { width, depth, height, wallThickness, divisionsX, divisionsZ, divisionThickness, chamferSize } = params
@@ -77,6 +110,10 @@ export function generateBox(params: BoxParams) {
   const iw = width - 2 * wt, id = depth - 2 * wt
   const iw2 = iw / 2, id2 = id / 2
   const fl = -h2 + wt // floor Z
+  // Divider top Z. Exactly h2 (not recomputed) when dividers are full height,
+  // so the default mesh is bit-for-bit what it was before this option existed.
+  const lowered = dividersLowered(params)
+  const dz = lowered ? fl + dividerHeightMm(params) : h2
 
   // Divider positions (absolute coords)
   const xDivs = [...divisionsX].sort((a, b) => a - b).map(p => -iw2 + (p / 100) * iw)
@@ -208,21 +245,33 @@ export function generateBox(params: BoxParams) {
 
   // === INNER WALLS (split at divider edges) ===
   // Front inner (N = +Y)
-  grid(xIn, [fl, h2],
+  grid(xIn, [fl, dz],
     (x0, x1, z0, z1) => [[x1,-id2,z0],[x0,-id2,z0],[x0,-id2,z1],[x1,-id2,z1]],
     (x0, x1) => isXDiv(x0, x1))
+  // Where a lowered divider meets this wall, the wall continues above the divider top
+  if (lowered) grid(xIn, [dz, h2],
+    (x0, x1, z0, z1) => [[x1,-id2,z0],[x0,-id2,z0],[x0,-id2,z1],[x1,-id2,z1]])
   // Back inner (N = -Y)
-  grid(xIn, [fl, h2],
+  grid(xIn, [fl, dz],
     (x0, x1, z0, z1) => [[x0,id2,z0],[x1,id2,z0],[x1,id2,z1],[x0,id2,z1]],
     (x0, x1) => isXDiv(x0, x1))
+  // Where a lowered divider meets this wall, the wall continues above the divider top
+  if (lowered) grid(xIn, [dz, h2],
+    (x0, x1, z0, z1) => [[x0,id2,z0],[x1,id2,z0],[x1,id2,z1],[x0,id2,z1]])
   // Left inner (N = +X)
-  grid(yIn, [fl, h2],
+  grid(yIn, [fl, dz],
     (y0, y1, z0, z1) => [[-iw2,y0,z0],[-iw2,y1,z0],[-iw2,y1,z1],[-iw2,y0,z1]],
     (y0, y1) => isYDiv(y0, y1))
+  // Where a lowered divider meets this wall, the wall continues above the divider top
+  if (lowered) grid(yIn, [dz, h2],
+    (y0, y1, z0, z1) => [[-iw2,y0,z0],[-iw2,y1,z0],[-iw2,y1,z1],[-iw2,y0,z1]])
   // Right inner (N = -X)
-  grid(yIn, [fl, h2],
+  grid(yIn, [fl, dz],
     (y0, y1, z0, z1) => [[iw2,y1,z0],[iw2,y0,z0],[iw2,y0,z1],[iw2,y1,z1]],
     (y0, y1) => isYDiv(y0, y1))
+  // Where a lowered divider meets this wall, the wall continues above the divider top
+  if (lowered) grid(yIn, [dz, h2],
+    (y0, y1, z0, z1) => [[iw2,y1,z0],[iw2,y0,z0],[iw2,y0,z1],[iw2,y1,z1]])
 
   // === TOP SURFACE (N = +Z) — rim + divider tops ===
   if (c > 0) {
@@ -234,6 +283,8 @@ export function generateBox(params: BoxParams) {
         const inX = x0 >= -iw2 - 0.001 && x1 <= iw2 + 0.001
         const inY = y0 >= -id2 - 0.001 && y1 <= id2 + 0.001
         if (inX && inY && !isXDiv(x0, x1) && !isYDiv(y0, y1)) continue
+        // Divider tops (inside the inner area) can sit below the rim
+        const zt = inX && inY ? dz : h2
 
         const isFirstX = i === 0, isLastX = i === xT.length - 2
         const isFirstY = j === 0, isLastY = j === yT.length - 2
@@ -246,13 +297,18 @@ export function generateBox(params: BoxParams) {
         } else if (isLastX && isLastY) {
           polys.push({ vertices: [[x0,y0,h2],[x1,y0,h2],[x0,y1,h2]] })
         } else {
-          polys.push({ vertices: [[x0,y0,h2],[x1,y0,h2],[x1,y1,h2],[x0,y1,h2]] })
+          polys.push({ vertices: [[x0,y0,zt],[x1,y0,zt],[x1,y1,zt],[x0,y1,zt]] })
         }
       }
     }
   } else {
     grid(xAll, yAll,
-      (x0, x1, y0, y1) => [[x0,y0,h2],[x1,y0,h2],[x1,y1,h2],[x0,y1,h2]],
+      (x0, x1, y0, y1) => {
+        const inX = x0 >= -iw2 - 0.001 && x1 <= iw2 + 0.001
+        const inY = y0 >= -id2 - 0.001 && y1 <= id2 + 0.001
+        const zt = inX && inY ? dz : h2 // divider tops can sit below the rim
+        return [[x0,y0,zt],[x1,y0,zt],[x1,y1,zt],[x0,y1,zt]]
+      },
       (x0, x1, y0, y1) => {
         // Keep rim (outside inner area) and divider tops; skip cavity openings
         const inX = x0 >= -iw2 - 0.001 && x1 <= iw2 + 0.001
@@ -266,11 +322,11 @@ export function generateBox(params: BoxParams) {
   for (const xd of xDivs) {
     const xl = xd - dt / 2, xr = xd + dt / 2
     // Left face (N = -X)
-    grid(yIn, [fl, h2],
+    grid(yIn, [fl, dz],
       (y0, y1, z0, z1) => [[xl,y1,z0],[xl,y0,z0],[xl,y0,z1],[xl,y1,z1]],
       (y0, y1) => isYDiv(y0, y1))
     // Right face (N = +X)
-    grid(yIn, [fl, h2],
+    grid(yIn, [fl, dz],
       (y0, y1, z0, z1) => [[xr,y0,z0],[xr,y1,z0],[xr,y1,z1],[xr,y0,z1]],
       (y0, y1) => isYDiv(y0, y1))
   }
@@ -279,11 +335,11 @@ export function generateBox(params: BoxParams) {
   for (const yd of yDivs) {
     const yf = yd - dt / 2, yb = yd + dt / 2
     // Front face (N = -Y)
-    grid(xIn, [fl, h2],
+    grid(xIn, [fl, dz],
       (x0, x1, z0, z1) => [[x0,yf,z0],[x1,yf,z0],[x1,yf,z1],[x0,yf,z1]],
       (x0, x1) => isXDiv(x0, x1))
     // Back face (N = +Y)
-    grid(xIn, [fl, h2],
+    grid(xIn, [fl, dz],
       (x0, x1, z0, z1) => [[x1,yb,z0],[x0,yb,z0],[x0,yb,z1],[x1,yb,z1]],
       (x0, x1) => isXDiv(x0, x1))
   }
@@ -292,7 +348,9 @@ export function generateBox(params: BoxParams) {
   const holeSolids: any[] = []
   if (params.boxPattern !== 'none') {
     const wallHoles = boxWallHoles(params)
-    const floorHoles = boxFloorHoles(params)
+    const floorHoles = params.boxPatternFloor ? boxFloorHoles(params) : null
+    const dividerHoles = params.boxPatternDividers ? boxDividerHoles(params) : null
+    if (dividerHoles) holeSolids.push(dividerHoles)
     if (wallHoles) holeSolids.push(wallHoles)
     if (floorHoles) holeSolids.push(floorHoles)
   }
@@ -359,38 +417,86 @@ function fingerSlotLayouts(params: BoxParams, axis: 'x' | 'z'): FingerSlotLayout
   return slots
 }
 
+// Outline of a notch in the wall plane (x = along the wall, y = world Z): open
+// at the top, bottom corners rounded with radius rc. When rc is half the width
+// the bottom is a full semicircle. One flat polygon, extruded straight through
+// the wall — no shape-on-shape booleans for the cutter to get wrong.
+function roundedSlotOutline(w: number, zBot: number, zTop: number, rc: number): [number, number][] {
+  const steps = 10
+  const hw = w / 2
+  const pts: [number, number][] = []
+  // Bottom edge and right arc: centre (hw - rc, zBot + rc), angle -90° → 0°
+  for (let k = 0; k <= steps; k++) {
+    const a = -Math.PI / 2 + (k / steps) * (Math.PI / 2)
+    pts.push([hw - rc + rc * Math.cos(a), zBot + rc + rc * Math.sin(a)])
+  }
+  pts.push([hw, zTop], [-hw, zTop])
+  // Left arc: centre (-hw + rc, zBot + rc), angle 180° → 270°
+  for (let k = 0; k <= steps; k++) {
+    const a = Math.PI + (k / steps) * (Math.PI / 2)
+    pts.push([-hw + rc + rc * Math.cos(a), zBot + rc + rc * Math.sin(a)])
+  }
+  // A full semicircle makes the two arcs meet at the bottom: drop repeated points
+  return pts.filter((p, i) => i === 0 || Math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1]) > 1e-9)
+}
+
 function fingerSlotCutouts(params: BoxParams): any | null {
-  const { width, depth, height, wallThickness: wt, divisionsX, divisionsZ, divisionThickness, includeHinge, fingerSlotDividers } = params
+  const { width, depth, height, wallThickness: wt, divisionsX, divisionsZ, divisionThickness, fingerSlotDividers, fingerSlotWalls } = params
+  const hinged = hasHinge(params)
   const w2 = width / 2, d2 = depth / 2, h2 = height / 2
   const dt = clampDivisionThickness(divisionThickness, wt)
   const iw = width - 2 * wt, id = depth - 2 * wt
 
   const zTop = h2 + 0.5 // overshoot above the rim — no coplanar top faces
+  // Divider tops: a notch only matters where the divider rises above the slot floor
+  const dividerTop = -h2 + wt + dividerHeightMm(params)
   const solids: any[] = []
   // One prism per wall, just thicker than the wall it notches (±0.5 overshoot
   // into air on both sides) so cut planes never coincide with wall faces
   const prism = (cx: number, cy: number, sx: number, sy: number, zBot: number) =>
     translate([cx, cy, (zTop + zBot) / 2], cuboid({ size: [sx, sy, zTop - zBot] }))
 
+  // One notch through a wall or divider centred at (cx, cy). axis 'x' notches a
+  // wall perpendicular to X (the notch runs along Y); 'z' one perpendicular to Y.
+  // `thickness` is the cutter's depth through the wall.
+  const slot = (axis: 'x' | 'z', cx: number, cy: number, thickness: number, w: number, zBot: number) => {
+    // Corner radius: up to half the width, but never deeper than the notch itself
+    const rc = Math.min(w / 2, h2 - zBot)
+    if (!params.fingerSlotRound || rc < 0.3) {
+      return axis === 'x' ? prism(cx, cy, thickness, w, zBot) : prism(cx, cy, w, thickness, zBot)
+    }
+    const shape = extrudeLinear({ height: thickness }, polygon({ points: roundedSlotOutline(w, zBot, zTop, rc) }))
+    // Same orientations the cutout patterns use: X notches map (x,y,z) → (z,x,y),
+    // so the shape's width runs along Y and the extrusion along X; Z notches
+    // rotate 90° about X, so the extrusion runs along -Y
+    return axis === 'x'
+      ? translate([cx - thickness / 2, cy, 0], rotate([0, Math.PI / 2, 0], rotate([0, 0, Math.PI / 2], shape)))
+      : translate([cx, cy + thickness / 2, 0], rotate([Math.PI / 2, 0, 0], shape))
+  }
+
   for (const { c, w, zBot } of fingerSlotLayouts(params, 'x')) {
-    solids.push(prism(-w2 + wt / 2, c, wt + 1, w, zBot)) // left outer wall
-    solids.push(prism(w2 - wt / 2, c, wt + 1, w, zBot))  // right outer wall
-    if (fingerSlotDividers) {
+    if (fingerSlotWalls) {
+      solids.push(slot('x', -w2 + wt / 2, c, wt + 1, w, zBot)) // left outer wall
+      solids.push(slot('x', w2 - wt / 2, c, wt + 1, w, zBot))  // right outer wall
+    }
+    if (fingerSlotDividers && dividerTop - zBot > 0.05) {
       for (const pct of divisionsX) {
         const x = -iw / 2 + (pct / 100) * iw
-        solids.push(prism(x, c, dt + 1, w, zBot))
+        solids.push(slot('x', x, c, dt + 1, w, zBot))
       }
     }
   }
 
   for (const { c, w, zBot } of fingerSlotLayouts(params, 'z')) {
-    solids.push(prism(c, -d2 + wt / 2, w, wt + 1, zBot)) // front outer wall
-    // The back wall carries the hinge knuckle arms — keep it solid then
-    if (!includeHinge) solids.push(prism(c, d2 - wt / 2, w, wt + 1, zBot))
-    if (fingerSlotDividers) {
+    if (fingerSlotWalls) {
+      solids.push(slot('z', c, -d2 + wt / 2, wt + 1, w, zBot)) // front outer wall
+      // The back wall carries the hinge knuckle arms — keep it solid then
+      if (!hinged) solids.push(slot('z', c, d2 - wt / 2, wt + 1, w, zBot))
+    }
+    if (fingerSlotDividers && dividerTop - zBot > 0.05) {
       for (const pct of divisionsZ) {
         const y = -id / 2 + (pct / 100) * id
-        solids.push(prism(c, y, w, dt + 1, zBot))
+        solids.push(slot('z', c, y, dt + 1, w, zBot))
       }
     }
   }
@@ -533,8 +639,8 @@ function patternPrisms(params: BoxParams, region: Rect2, zFrom: number, zTo: num
 
 /**
  * Cutout pattern through the box's 4 outer side walls (front/back/left/right)
- * to save filament. Divider walls stay solid — see boxFloorHoles for the
- * floor. Each wall's holes are laid out in the wall's own (u, v) plane —
+ * to save filament. Dividers have their own pass (boxDividerHoles) and the
+ * floor another (boxFloorHoles). Each wall's holes are laid out in the wall's own (u, v) plane —
  * u = position along the wall, v = height — then a canonical Z-extruded
  * prism is rotated so it punches through the wall's actual thickness axis
  * (Y for front/back, X for left/right) before being translated into place.
@@ -545,8 +651,9 @@ function patternPrisms(params: BoxParams, region: Rect2, zFrom: number, zTo: num
  * the hinge knuckle mounting arms and needs to stay solid.
  */
 function boxWallHoles(params: BoxParams): any | null {
-  const { width, depth, height, wallThickness: wt, chamferSize, includeHinge, boxPattern } = params
+  const { width, depth, height, wallThickness: wt, chamferSize, boxPattern } = params
   if (boxPattern === 'none') return null
+  const hinged = hasHinge(params)
 
   const w2 = width / 2, d2 = depth / 2, h2 = height / 2
   const c = Math.min(chamferSize, wt, width / 4, depth / 4)
@@ -574,8 +681,9 @@ function boxWallHoles(params: BoxParams): any | null {
   // border would be sliced open into a stress-raising partial cut
   const slotRects = (slots: FingerSlotLayout[]): Rect2[] =>
     slots.map(s => ({ x0: s.c - s.w / 2 - 1.5, x1: s.c + s.w / 2 + 1.5, y0: s.zBot - 1.5, y1: h2 + 1 }))
-  const fbExclusions = slotRects(fingerSlotLayouts(params, 'z'))
-  const lrExclusions = slotRects(fingerSlotLayouts(params, 'x'))
+  // (only the outer walls hold pattern holes, so nothing to avoid when they aren't notched)
+  const fbExclusions = params.fingerSlotWalls ? slotRects(fingerSlotLayouts(params, 'z')) : []
+  const lrExclusions = params.fingerSlotWalls ? slotRects(fingerSlotLayouts(params, 'x')) : []
 
   // Front & back walls: u = X, v = Z, extrusion punches through Y
   const fbRegion: Rect2 = { x0: -w2 + marginH, x1: w2 - marginH, y0: zBot, y1: zTop }
@@ -587,7 +695,7 @@ function boxWallHoles(params: BoxParams): any | null {
     for (const p of fbPositions) {
       solids.push(translate([p.x, -d2 - 0.5 + h, p.y], p.alt ? fPrismAlt : fPrism))
     }
-    if (!includeHinge) {
+    if (!hinged) {
       // rotate -90° about X: (x,y,z) -> (x, z, -y)
       const bPrism = rotate([-Math.PI / 2, 0, 0], prism)
       const bPrismAlt = rotate([-Math.PI / 2, 0, 0], prismAlt)
@@ -608,6 +716,84 @@ function boxWallHoles(params: BoxParams): any | null {
     for (const p of lrPositions) {
       solids.push(translate([-w2 - 0.5, p.x, p.y], p.alt ? sPrismAlt : sPrism)) // left
       solids.push(translate([iw2 - 0.5, p.x, p.y], p.alt ? sPrismAlt : sPrism)) // right
+    }
+  }
+
+  return unionAll(solids)
+}
+
+/**
+ * Cutout pattern through the divider walls. Each X divider is laid out in its
+ * own (u = depth, v = height) plane and each Z divider in (u = width, v = height),
+ * then the prism is rotated to punch through the divider's thickness — the
+ * same technique as the outer walls. The grid stays clear of the outer walls,
+ * the floor, the divider's own top edge (so lowered dividers work), every
+ * crossing divider, and any finger-slot notch on that divider, so no hole is
+ * ever sliced open into a partial cut.
+ */
+function boxDividerHoles(params: BoxParams): any | null {
+  const { width, depth, height, wallThickness: wt, divisionsX, divisionsZ, boxPattern } = params
+  if (boxPattern === 'none' || divisionsX.length + divisionsZ.length === 0) return null
+
+  const h2 = height / 2
+  const dt = clampDivisionThickness(params.divisionThickness, wt)
+  const iw = width - 2 * wt, id = depth - 2 * wt
+  const iw2 = iw / 2, id2 = id / 2
+  const margin = 2      // clear of the outer walls, the floor, and the divider's top edge
+  const crossGap = 1.5  // extra clearance beside a crossing divider
+
+  const zBot = -h2 + wt + margin
+  const zTop = -h2 + wt + dividerHeightMm(params) - margin
+  if (zTop <= zBot) return null
+
+  const size = Math.max(2, params.boxPatternSize)
+  const spacing = Math.max(1.5, params.boxPatternSpacing)
+  const shape = patternShape2D(boxPattern, size)
+  if (!shape) return null
+
+  const h = dt + 1 // through-thickness, overshooting both faces slightly
+  const prism = extrudeLinear({ height: h }, shape)
+  const prismAlt = boxPattern === 'triangles'
+    ? extrudeLinear({ height: h }, patternShape2D(boxPattern, size, true))
+    : prism
+
+  const xs = [...divisionsX].sort((a, b) => a - b).map(p => -iw2 + (p / 100) * iw)
+  const ys = [...divisionsZ].sort((a, b) => a - b).map(p => -id2 + (p / 100) * id)
+
+  // A divider's finger-slot notches (if it gets any) are no-go zones too
+  const notchRects = (slots: FingerSlotLayout[]): Rect2[] => params.fingerSlotDividers
+    ? slots.map(s => ({ x0: s.c - s.w / 2 - 1.5, x1: s.c + s.w / 2 + 1.5, y0: s.zBot - 1.5, y1: h2 + 1 }))
+    : []
+  const crossing = (centres: number[]): Rect2[] =>
+    centres.map(c => ({ x0: c - dt / 2 - crossGap, x1: c + dt / 2 + crossGap, y0: zBot - 1, y1: zTop + 1 }))
+
+  const solids: any[] = []
+
+  // X dividers: u = Y, v = Z, extrusion punches through X
+  if (xs.length > 0) {
+    const region: Rect2 = { x0: -id2 + margin, x1: id2 - margin, y0: zBot, y1: zTop }
+    const positions = patternGrid(boxPattern, size, spacing, region, [...crossing(ys), ...notchRects(fingerSlotLayouts(params, 'x'))])
+    if (positions) {
+      // compound rotate: (x,y,z) -> (z,x,y) — z (extrusion) becomes X, x/y (shape) become Y/Z
+      const sPrism = rotate([0, Math.PI / 2, 0], rotate([0, 0, Math.PI / 2], prism))
+      const sPrismAlt = rotate([0, Math.PI / 2, 0], rotate([0, 0, Math.PI / 2], prismAlt))
+      for (const x of xs) {
+        for (const p of positions) solids.push(translate([x - dt / 2 - 0.5, p.x, p.y], p.alt ? sPrismAlt : sPrism))
+      }
+    }
+  }
+
+  // Z dividers: u = X, v = Z, extrusion punches through Y
+  if (ys.length > 0) {
+    const region: Rect2 = { x0: -iw2 + margin, x1: iw2 - margin, y0: zBot, y1: zTop }
+    const positions = patternGrid(boxPattern, size, spacing, region, [...crossing(xs), ...notchRects(fingerSlotLayouts(params, 'z'))])
+    if (positions) {
+      // rotate 90° about X: (x,y,z) -> (x, -z, y) — z (extrusion) becomes -Y, y (shape) stays as Z
+      const fPrism = rotate([Math.PI / 2, 0, 0], prism)
+      const fPrismAlt = rotate([Math.PI / 2, 0, 0], prismAlt)
+      for (const y of ys) {
+        for (const p of positions) solids.push(translate([p.x, y - dt / 2 - 0.5 + h, p.y], p.alt ? fPrismAlt : fPrism))
+      }
     }
   }
 
@@ -735,9 +921,10 @@ function generateFlatLid(params: BoxParams) {
   // pre-mirroring assumes), so X notches must be cut mirrored to land on the
   // dividers after the flip. Y positions are unchanged by that flip.
   // Symmetric layouts hid this; asymmetric X percentages exposed it.
-  const xNotches = [...divisionsX].sort((a, b) => a - b)
+  const notchDividers = dividersReachLip(params)
+  const xNotches = !notchDividers ? [] : [...divisionsX].sort((a, b) => a - b)
     .map(p => innerW / 2 - (p / 100) * innerW)
-  const yNotches = [...divisionsZ].sort((a, b) => a - b)
+  const yNotches = !notchDividers ? [] : [...divisionsZ].sort((a, b) => a - b)
     .map(p => -innerD / 2 + (p / 100) * innerD)
 
   // Build breakpoints (sorted, deduplicated via Set)
@@ -1027,14 +1214,14 @@ function generateLidCSG(params: BoxParams, textGeometry: any) {
   const innerWidth = width - wallThickness * 2
   const innerDepth = depth - wallThickness * 2
 
-  for (const pct of divisionsX) {
+  for (const pct of dividersReachLip(params) ? divisionsX : []) {
     // Mirrored: the lid is used flipped about Y (x → -x), like the text
     const xPos = innerWidth / 2 - (pct / 100) * innerWidth
     const slot = cuboid({ size: [divThickness + lidTolerance * 2, lipOuterDepth + 0.2, lidHeight + 0.2] })
     lid = subtract(lid, translate([xPos, 0, lipCenterZ], slot))
   }
 
-  for (const pct of divisionsZ) {
+  for (const pct of dividersReachLip(params) ? divisionsZ : []) {
     const yPos = -innerDepth / 2 + (pct / 100) * innerDepth
     const slot = cuboid({ size: [lipOuterWidth + 0.2, divThickness + lidTolerance * 2, lidHeight + 0.2] })
     lid = subtract(lid, translate([0, yPos, lipCenterZ], slot))

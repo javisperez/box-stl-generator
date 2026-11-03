@@ -1,13 +1,16 @@
 import { useState, useEffect, useMemo } from 'react'
 import { BoxViewer } from './components/BoxViewer'
 import { ControlPanel } from './components/ControlPanel'
+import { ProjectsView } from './components/ProjectsView'
+import { arrangeOnPlate } from './utils/plateLayout'
+import { Segmented } from './components/ui/segmented'
 import {
   generateBox, generateLid, generateSleeve, sleeveOuterDims, jscadToThreeGeometry, BoxParams,
   generateBoxHingeKnuckles, generateLidHingeKnuckles,
 } from './utils/boxGenerator'
 import { textToJscadGeometry } from './utils/textGenerator'
 import { exportJscadToSTL, exportMultipleJscadToSTL, jscadVolumeCm3 } from './utils/stlExporter'
-import { Button } from './components/ui/button'
+import { TopBar } from './components/TopBar'
 import {
   DEFAULTS, SavedProject, loadCurrentParams, saveCurrentParams, clearCurrentParams,
   loadCurrentProjectName, saveCurrentProjectName,
@@ -15,41 +18,9 @@ import {
   exportAllProjectsFile, consumeShareLink,
   AppSettings, loadSettings, saveSettings, slugify,
 } from './utils/projectStorage'
-import { Github, Download, Plus, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react'
+import { AlertTriangle } from 'lucide-react'
+import { formatGrams } from './utils/filament'
 import * as THREE from 'three'
-
-const PLA_DENSITY = 1.24 // g/cm³, solid
-
-function formatGrams(volumeCm3: number): string {
-  const grams = volumeCm3 * PLA_DENSITY
-  return grams < 10 ? grams.toFixed(1) : String(Math.round(grams))
-}
-
-// Quick-export card shown in the floating export control
-function PartCard({ title, subtitle, volumeCm3, onExport }: {
-  title: string
-  subtitle: string
-  volumeCm3: number
-  onExport: () => void
-}) {
-  return (
-    <div className="bg-card/90 backdrop-blur border rounded-lg p-4 flex flex-col w-64 shrink-0">
-      <div className="flex items-baseline justify-between gap-2">
-        <h3 className="font-semibold">{title}</h3>
-        {volumeCm3 > 0 && (
-          <span className="text-xs text-muted-foreground whitespace-nowrap" title="Solid volume — estimate for PLA">
-            ≈ {formatGrams(volumeCm3)} g PLA
-          </span>
-        )}
-      </div>
-      <p className="text-sm text-muted-foreground">{subtitle}</p>
-      <Button size="sm" variant="outline" className="mt-3" onClick={onExport}>
-        <Download className="mr-2 h-4 w-4" />
-        Export STL
-      </Button>
-    </div>
-  )
-}
 
 // A share link (#p=…) opens the app with that project loaded. Consumed once
 // at module load, before React mounts, so StrictMode double-rendering can't
@@ -66,6 +37,7 @@ function App() {
   // Viewer-only: show the lid closed on the box (or the box inside the sleeve).
   // Deliberately not part of BoxParams so it never affects exports or saved projects.
   const [previewInPlace, setPreviewInPlace] = useState(false)
+  const [view, setView] = useState<'workbench' | 'projects'>('workbench')
 
   const [geometry, setGeometry] = useState<THREE.BufferGeometry | null>(null)
   const [lidGeometry, setLidGeometry] = useState<THREE.BufferGeometry | null>(null)
@@ -183,6 +155,17 @@ function App() {
     }
   }
 
+  const handleDuplicateProject = (name: string) => {
+    const source = savedProjects.find(p => p.name === name)
+    if (!source) return
+    const taken = new Set(savedProjects.map(p => p.name.toLowerCase()))
+    let copyName = `${name} copy`
+    for (let n = 2; taken.has(copyName.toLowerCase()); n++) copyName = `${name} copy ${n}`
+    const next = upsertProject(savedProjects, copyName, source.params)
+    setSavedProjects(next)
+    persistProjects(next)
+  }
+
   const handleDeleteProject = (name: string) => {
     if (!confirm(`Delete project "${name}"?`)) return
     const next = savedProjects.filter(p => p.name !== name)
@@ -224,9 +207,25 @@ function App() {
   const isSleeve = params.includeLid && params.lidStyle === 'sleeve'
   const wt = params.wallThickness
 
+  const inPlace = previewInPlace && params.includeLid
+
+  // Plate arrangement: the box and its lid/sleeve side by side, centred on the plate and
+  // turned a quarter turn only when that is what lets them fit. Always computed so the
+  // Print tab can say whether the parts fit together; only applied when auto-arrange is on.
+  const plateX = Math.max(settings.printerBedX, 1)
+  const plateY = Math.max(settings.printerBedY, 1)
+  const lidFootprint = isSleeve ? { w: sleeve.w, d: sleeve.d } : { w: params.width, d: params.depth }
+  const arrangement = arrangeOnPlate(
+    params.includeLid ? [{ w: params.width, d: params.depth }, lidFootprint] : [{ w: params.width, d: params.depth }],
+    plateX, plateY,
+  )
+  const arranged = settings.autoArrange && !inPlace
+
+  const boxPlacement = arranged ? arrangement.placements[0] : { x: 0, y: 0, rotated: false }
+
   let lidPosition: [number, number, number]
   let lidRotation: [number, number, number] = [0, 0, 0]
-  if (previewInPlace && params.includeLid) {
+  if (inPlace) {
     if (isSleeve) {
       // Box slid fully in: sleeve centered on the box height, shifted back so the
       // box back sits against the sleeve's inner back wall (tolerance gap at rest).
@@ -241,6 +240,10 @@ function App() {
       lidRotation = [0, Math.PI, 0]
       lidPosition = [0, 0, params.height]
     }
+  } else if (arranged && params.includeLid) {
+    const placed = arrangement.placements[1]
+    lidPosition = [placed.x, placed.y, isSleeve ? sleeve.h / 2 : wt]
+    lidRotation = [0, 0, placed.rotated ? Math.PI / 2 : 0]
   } else {
     lidPosition = [
       isSleeve ? params.width / 2 + sleeve.w / 2 + 10 : params.width + 10,
@@ -248,6 +251,8 @@ function App() {
       isSleeve ? sleeve.h / 2 : wt,
     ]
   }
+  // Lid shown on its own beside the box (as opposed to assembled onto it)
+  const lidBeside = params.includeLid && !inPlace
 
   // Material estimates for the export control
   const boxVolume = useMemo(() => jscadVolumeCm3([boxJscad, hingeBoxJscad]), [boxJscad, hingeBoxJscad])
@@ -270,176 +275,148 @@ function App() {
 
   const fmt = (n: number) => +n.toFixed(1)
   const compartments = (params.divisionsX.length + 1) * (params.divisionsZ.length + 1)
-  const exportExpanded = settings.exportExpanded
-  const setExportExpanded = (expanded: boolean) => setSettings({ ...settings, exportExpanded: expanded })
 
   return (
-    <div className="min-h-screen bg-background lg:h-screen lg:flex lg:overflow-hidden">
-      {/* Preview — fills every pixel the sidebar doesn't use */}
-      <main className="relative h-[60vh] lg:h-full lg:flex-1 lg:min-w-0">
-        <div className="absolute inset-0">
-          <BoxViewer
-            geometry={geometry}
-            lidGeometry={lidGeometry}
-            hingeBoxGeometry={hingeBoxGeometry}
-            hingeLidGeometry={hingeLidGeometry}
-            boxHeight={params.height}
-            lidPosition={lidPosition}
-            lidRotation={lidRotation}
-            plateWidth={settings.printerBedX}
-            plateDepth={settings.printerBedY}
-            plateOversized={oversizedParts.length > 0}
-          />
-        </div>
-        <div className="absolute top-4 left-4 bg-black/60 text-white text-xs font-mono px-2.5 py-1.5 rounded-md pointer-events-none">
-          {fmt(params.width)} × {fmt(params.depth)} × {fmt(params.height)} mm
-        </div>
-        <div className="hidden sm:block absolute top-4 right-4 text-white/40 text-xs pointer-events-none">
-          drag to rotate · scroll to zoom
-        </div>
-        {oversizedParts.length > 0 && (
-          <div className="absolute top-4 left-1/2 -translate-x-1/2 flex items-center gap-1.5 bg-red-600/90 text-white text-xs px-3 py-1.5 rounded-md pointer-events-none whitespace-nowrap">
-            <AlertTriangle className="h-3.5 w-3.5" />
-            {oversizedParts.join(' and ')} won't fit the {settings.printerBedX} × {settings.printerBedY} mm plate
-          </div>
-        )}
+    <div className="min-h-screen bg-background lg:h-screen lg:flex lg:flex-col lg:overflow-hidden">
+      <TopBar
+        params={params}
+        projectName={projectName}
+        onProjectNameChange={setProjectName}
+        savedProjects={savedProjects}
+        onSaveProject={handleSaveProject}
+        onLoadProject={(name) => { handleLoadProject(name); setView('workbench') }}
+        onDeleteProject={handleDeleteProject}
+        onNewProject={() => { handleReset(); setView('workbench') }}
+        onExportJson={handleExportJson}
+        onExportAllJson={handleExportAllJson}
+        onImportJson={handleImportJson}
+        onExport={handleExportAll}
+        exportLabel={params.includeLid ? 'Export all' : 'Export STL'}
+        onOpenProjects={() => setView('projects')}
+        projectsOpen={view === 'projects'}
+      />
 
-        {/* Floating export control — collapsed pill or expanded per-part cards.
-            pointer-events-none on the wrapper so the empty space around the
-            cards still rotates/zooms the viewport; children re-enable it. */}
-        <div className="absolute inset-x-4 bottom-4 flex flex-col items-start gap-3 pointer-events-none">
-          {exportExpanded && (
-            <div className="flex gap-3 overflow-x-auto max-w-full pb-1 pointer-events-auto">
-              <PartCard
-                title="Box"
-                subtitle={`${params.width} × ${params.depth} × ${params.height} mm · ${compartments} compartment${compartments === 1 ? '' : 's'}`}
-                volumeCm3={boxVolume}
-                onExport={handleExport}
-              />
-              {params.includeLid ? (
-                <PartCard
-                  title={isSleeve ? 'Drawer Sleeve' : 'Lid'}
-                  subtitle={isSleeve
-                    ? `${fmt(sleeve.w)} × ${fmt(sleeve.d)} × ${fmt(sleeve.h)} mm · ${params.sleeveTolerance} mm fit`
-                    : params.includeHinge
-                      ? `${params.width} × ${params.depth} mm flat cap · snap hinge`
-                      : `${params.width} × ${params.depth} mm cap · ${params.lidHeight} mm lip`}
-                  volumeCm3={lidVolume}
-                  onExport={handleExportLid}
-                />
-              ) : (
-                <div className="bg-card/60 backdrop-blur border border-dashed rounded-lg p-4 flex flex-col items-center justify-center gap-2 text-center w-64 shrink-0">
-                  <p className="text-sm text-muted-foreground">No lid or sleeve yet</p>
-                  <Button size="sm" variant="ghost" onClick={() => setParams({ ...params, includeLid: true })}>
-                    <Plus className="mr-1 h-4 w-4" />
-                    Add one
-                  </Button>
-                </div>
-              )}
+      {view === 'projects' && (
+        <ProjectsView
+          params={params}
+          projectName={projectName}
+          onProjectNameChange={setProjectName}
+          savedProjects={savedProjects}
+          onSaveProject={handleSaveProject}
+          onLoadProject={(name) => { handleLoadProject(name); setView('workbench') }}
+          onDuplicateProject={handleDuplicateProject}
+          onDeleteProject={handleDeleteProject}
+          onNewProject={() => { handleReset(); setView('workbench') }}
+          onExportAllJson={handleExportAllJson}
+          onImportJson={handleImportJson}
+          onBack={() => setView('workbench')}
+        />
+      )}
+
+      <div className={view === 'projects' ? 'hidden' : 'lg:flex lg:flex-1 lg:min-h-0'}>
+        {/* Preview — fills every pixel the sidebar doesn't use */}
+        <main className="relative h-[60vh] lg:h-full lg:flex-1 lg:min-w-0">
+          <div className="absolute inset-0">
+            <BoxViewer
+              geometry={geometry}
+              lidGeometry={lidGeometry}
+              hingeBoxGeometry={hingeBoxGeometry}
+              hingeLidGeometry={hingeLidGeometry}
+              boxWidth={params.width}
+              boxDepth={params.depth}
+              boxHeight={params.height}
+              lidPosition={lidPosition}
+              lidRotation={lidRotation}
+              lidBeside={lidBeside}
+              boxPlacement={boxPlacement}
+              plateWidth={settings.printerBedX}
+              plateDepth={settings.printerBedY}
+              plateOversized={oversizedParts.length > 0}
+              viewMode={settings.viewMode}
+            />
+          </div>
+          <div className="absolute top-4 left-4 flex items-center gap-3">
+            <Segmented
+              aria-label="View"
+              className="w-56 bg-card/90 backdrop-blur"
+              value={settings.viewMode}
+              onChange={(viewMode) => setSettings({ ...settings, viewMode })}
+              options={[
+                { value: 'perspective', label: 'Perspective' },
+                { value: 'isometric', label: 'Isometric' },
+              ]}
+            />
+            {settings.viewMode === 'perspective' && (
+              <span className="bg-black/60 text-white text-xs font-mono px-2.5 py-1.5 rounded-md pointer-events-none">
+                {fmt(params.width)} × {fmt(params.depth)} × {fmt(params.height)} mm
+              </span>
+            )}
+          </div>
+          <div className="hidden sm:block absolute top-4 right-4 text-white/40 text-xs pointer-events-none">
+            {settings.viewMode === 'isometric' ? 'drag to pan · scroll to zoom' : 'drag to rotate · scroll to zoom'}
+          </div>
+          {oversizedParts.length > 0 && (
+            <div className="absolute top-4 left-1/2 -translate-x-1/2 flex items-center gap-1.5 bg-red-600/90 text-white text-xs px-3 py-1.5 rounded-md pointer-events-none whitespace-nowrap">
+              <AlertTriangle className="h-3.5 w-3.5" />
+              {oversizedParts.join(' and ')} won't fit the {settings.printerBedX} × {settings.printerBedY} mm plate
             </div>
           )}
 
-          <div className="flex items-center bg-card/90 backdrop-blur border rounded-lg overflow-hidden pointer-events-auto">
-            <Button variant="ghost" className="rounded-none" onClick={handleExportAll}>
-              <Download className="mr-2 h-4 w-4" />
-              Export {params.includeLid ? 'all' : 'box'}
-              {totalVolume > 0 && (
-                <span className="ml-2 text-xs text-muted-foreground">≈ {formatGrams(totalVolume)} g PLA</span>
-              )}
-            </Button>
-            <button
-              className="px-2.5 self-stretch border-l text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-              onClick={() => setExportExpanded(!exportExpanded)}
-              title={exportExpanded ? 'Collapse part details' : 'Expand part details'}
+          {/* Quiet stats pill — per-part export lives on the Print tab */}
+          {totalVolume > 0 && (
+            <div
+              className="absolute bottom-4 left-4 flex items-center gap-2 bg-card/90 backdrop-blur border rounded-full px-3 py-1.5 font-mono text-xs text-muted-foreground pointer-events-none"
+              title="Solid volume — real prints use less with infill"
             >
-              {exportExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
-            </button>
-          </div>
-        </div>
-      </main>
+              <span className="h-2 w-2 rounded-full bg-emerald-400" aria-hidden />
+              <span className="text-foreground">≈ {formatGrams(totalVolume, settings.filament)} g {settings.filament}</span>
+              <span>·</span>
+              <span>{compartments} compartment{compartments === 1 ? '' : 's'}</span>
+            </div>
+          )}
+        </main>
 
-      {/* Control sidebar — pinned to the right edge, scrolls independently of the preview */}
-      <aside className="lg:w-105 lg:shrink-0 lg:h-full flex flex-col border-t lg:border-t-0 lg:border-l bg-card">
-        <header className="flex items-start justify-between gap-4 px-5 py-4 border-b">
-          <div>
-            <h1 className="text-xl font-bold">3D Box Generator</h1>
-            <p className="text-sm text-muted-foreground">
-              Parametric boxes for 3D printing
-            </p>
+        {/* Control sidebar — pinned to the right edge, scrolls independently of the preview */}
+        <aside className="lg:w-[22rem] lg:shrink-0 lg:h-full flex flex-col border-t lg:border-t-0 lg:border-l bg-card">
+          <div className="flex-1 lg:overflow-y-auto">
+            <ControlPanel
+              params={params}
+              onParamsChange={setParams}
+              previewInPlace={previewInPlace}
+              onPreviewInPlaceChange={setPreviewInPlace}
+              settings={settings}
+              onSettingsChange={setSettings}
+              boxVolume={boxVolume}
+              lidVolume={lidVolume}
+              onExportBox={handleExport}
+              onExportLid={handleExportLid}
+              partsFitTogether={arrangement.fitsTogether}
+            />
           </div>
-          <a
-            href="https://github.com/javisperez/box-stl-generator"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-muted-foreground hover:text-foreground transition-colors mt-1"
-            title="View on GitHub"
-          >
-            <Github size={20} />
-          </a>
-        </header>
 
-        <div className="flex-1 lg:overflow-y-auto">
-          <ControlPanel
-            params={params}
-            onParamsChange={setParams}
-            previewInPlace={previewInPlace}
-            onPreviewInPlaceChange={setPreviewInPlace}
-            settings={settings}
-            onSettingsChange={setSettings}
-            projectName={projectName}
-            onProjectNameChange={setProjectName}
-            onReset={handleReset}
-            savedProjects={savedProjects}
-            onSaveProject={handleSaveProject}
-            onLoadProject={handleLoadProject}
-            onDeleteProject={handleDeleteProject}
-            onExportJson={handleExportJson}
-            onExportAllJson={handleExportAllJson}
-            onImportJson={handleImportJson}
-          />
-        </div>
-
-        <footer className="px-5 py-3 border-t text-center text-xs text-muted-foreground">
-          Made by{' '}
-          <a
-            href="https://github.com/javisperez"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline hover:text-foreground transition-colors"
-          >
-            Javis Perez
-          </a>
-          {' '}&amp;{' '}
-          <a
-            href="https://claude.ai"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline hover:text-foreground transition-colors"
-          >
-            Claude
-          </a>
-          {' '}&middot;{' '}
-          <a
-            href="https://github.com/javisperez/box-stl-generator"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline hover:text-foreground transition-colors"
-          >
-            Source on GitHub
-          </a>
-          <div className="mt-2">
-            <a href="https://ko-fi.com/G0U727FZNX" target="_blank" rel="noopener noreferrer">
-              <img
-                height={36}
-                style={{ border: 0, height: 36 }}
-                src="https://storage.ko-fi.com/cdn/kofi6.png?v=6"
-                alt="Buy Me a Coffee at ko-fi.com"
-                className="inline-block"
-              />
-            </a>
-          </div>
-        </footer>
-      </aside>
+          <footer className="shrink-0 border-t px-4 py-2.5 text-[11px] leading-relaxed text-center text-muted-foreground">
+            Made by{' '}
+            <a href="https://github.com/javisperez" target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground whitespace-nowrap">Javis Perez</a>
+            {' '}&amp;{' '}
+            <a href="https://claude.ai" target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground whitespace-nowrap">Claude</a>
+            {' · '}
+            <a href="https://github.com/javisperez/box-stl-generator" target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground whitespace-nowrap">Source on GitHub</a>
+            {' · '}
+            <a href="https://github.com/javisperez/box-stl-generator/blob/main/LICENSE" target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground whitespace-nowrap">Apache 2.0</a>
+            <div className="mt-2">
+              <a href="https://ko-fi.com/G0U727FZNX" target="_blank" rel="noopener noreferrer">
+                <img
+                  height={36}
+                  style={{ border: 0, height: 36 }}
+                  src="https://storage.ko-fi.com/cdn/kofi6.png?v=6"
+                  alt="Buy Me a Coffee at ko-fi.com"
+                  className="inline-block"
+                />
+              </a>
+            </div>
+          </footer>
+        </aside>
+      </div>
     </div>
   )
 }

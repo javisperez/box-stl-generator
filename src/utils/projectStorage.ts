@@ -1,4 +1,6 @@
 import { BoxParams, clampDivisionThickness, LID_PATTERNS } from './boxGenerator'
+import type { FilamentType } from './filament'
+import type { ViewMode } from './boxLayout'
 
 export const DEFAULTS: BoxParams = {
   width: 80,
@@ -24,11 +26,16 @@ export const DEFAULTS: BoxParams = {
   boxPattern: 'none' as const,
   boxPatternSize: 8,
   boxPatternSpacing: 4,
+  boxPatternFloor: true,
+  boxPatternDividers: false,
   fingerSlotAxes: 'none' as const,
   fingerSlotWidth: 15,
   fingerSlotDepth: 15,
   fingerSlotPosition: 50,
   fingerSlotDividers: true,
+  fingerSlotWalls: true,
+  fingerSlotRound: false,
+  dividerHeight: 0,
   chamferSize: 0,
   includeHinge: false,
   hingeCount: 1,
@@ -62,13 +69,17 @@ export function slugify(name: string): string {
 export interface AppSettings {
   printerBedX: number
   printerBedY: number
-  exportExpanded: boolean // floating export control expanded vs collapsed
+  filament: FilamentType // material used for the weight estimates
+  viewMode: ViewMode // 3D viewport camera: free perspective or fixed isometric with dimension rulers
+  autoArrange: boolean // lay the box and lid out next to each other on the plate in the preview
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
   printerBedX: 220,
   printerBedY: 220,
-  exportExpanded: true,
+  filament: 'PLA',
+  viewMode: 'perspective',
+  autoArrange: true,
 }
 
 export function loadSettings(): AppSettings {
@@ -108,6 +119,11 @@ export function normalizeParams(raw: unknown): BoxParams {
   p.fingerSlotDepth = Math.min(Math.max(Number(p.fingerSlotDepth) || 15, 2), 200)
   p.fingerSlotPosition = Math.min(Math.max(Number(p.fingerSlotPosition) || 50, 0), 100)
   p.fingerSlotDividers = p.fingerSlotDividers !== false
+  p.fingerSlotWalls = p.fingerSlotWalls !== false
+  p.fingerSlotRound = p.fingerSlotRound === true
+  p.boxPatternFloor = p.boxPatternFloor !== false
+  p.boxPatternDividers = p.boxPatternDividers === true
+  p.dividerHeight = Math.max(0, Number(p.dividerHeight) || 0)
   if (!Array.isArray(p.divisionsX)) p.divisionsX = []
   if (!Array.isArray(p.divisionsZ)) p.divisionsZ = []
   return p
