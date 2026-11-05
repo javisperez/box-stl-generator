@@ -1,10 +1,16 @@
-import { useRef, useState } from 'react'
-import { Label } from './ui/label'
-import { SliderField } from './ui/slider-field'
+import { useState } from 'react'
+import { AlertTriangle, CheckCircle2, Download, Wand2 } from 'lucide-react'
 import { Button } from './ui/button'
-import { Save, RotateCcw, ChevronDown, Trash2, FileDown, FileUp, AlertTriangle, CheckCircle2, Link2, Check, Archive } from 'lucide-react'
-import { BoxParams, sleeveOuterDims, LID_PATTERNS } from '@/utils/boxGenerator'
-import { SavedProject, AppSettings, buildShareLink } from '@/utils/projectStorage'
+import { Group } from './ui/group'
+import { Segmented } from './ui/segmented'
+import { SliderField } from './ui/slider-field'
+import { SwitchRow } from './ui/switch'
+import { StartFromDialog } from './StartFromDialog'
+import { DividerEditor } from './DividerEditor'
+import { BoxParams, dividerHeightMm, hasHinge, sleeveOuterDims, LID_PATTERNS } from '@/utils/boxGenerator'
+import { AppSettings } from '@/utils/projectStorage'
+import { AXIS_COLORS as AXIS, Closure, closureOf, frictionLipDepth } from '@/utils/boxLayout'
+import { FILAMENTS, formatGrams } from '@/utils/filament'
 
 interface ControlPanelProps {
   params: BoxParams
@@ -13,19 +19,15 @@ interface ControlPanelProps {
   onPreviewInPlaceChange: (value: boolean) => void
   settings: AppSettings
   onSettingsChange: (settings: AppSettings) => void
-  projectName: string
-  onProjectNameChange: (name: string) => void
-  onReset: () => void
-  savedProjects: SavedProject[]
-  onSaveProject: (name: string) => void
-  onLoadProject: (name: string) => void
-  onDeleteProject: (name: string) => void
-  onExportJson: (name: string) => void
-  onExportAllJson: () => void
-  onImportJson: (file: File) => void
+  boxVolume: number
+  lidVolume: number
+  onExportBox: () => void
+  onExportLid: () => void
+  // The box and lid/sleeve fit on the plate at the same time (each may fit alone but not together)
+  partsFitTogether: boolean
 }
 
-type TabType = 'generator' | 'box' | 'lid' | 'settings'
+type TabType = 'box' | 'lid' | 'print'
 
 const PRINTER_PRESETS: { label: string; bedX: number; bedY: number }[] = [
   { label: 'Custom', bedX: 0, bedY: 0 },
@@ -41,47 +43,15 @@ const PRINTER_PRESETS: { label: string; bedX: number; bedY: number }[] = [
   { label: 'Elegoo Neptune 4', bedX: 225, bedY: 225 },
 ]
 
-function evenPositions(count: number): number[] {
-  return Array.from({ length: count }, (_, i) => Math.round((i + 1) * 100 / (count + 1)))
-}
+const fieldCls = 'w-full px-3 py-2 text-sm rounded-md border bg-background focus:outline-none focus:border-ring'
+const labelCls = 'text-xs text-muted-foreground'
 
 export function ControlPanel({
   params, onParamsChange, previewInPlace, onPreviewInPlaceChange,
-  settings, onSettingsChange, projectName, onProjectNameChange, onReset,
-  savedProjects, onSaveProject, onLoadProject, onDeleteProject, onExportJson, onExportAllJson, onImportJson,
+  settings, onSettingsChange, boxVolume, lidVolume, onExportBox, onExportLid, partsFitTogether,
 }: ControlPanelProps) {
-  const [activeTab, setActiveTab] = useState<TabType>('generator')
-  const importInputRef = useRef<HTMLInputElement>(null)
-  const [linkCopied, setLinkCopied] = useState(false)
-
-  const handleCopyShareLink = async () => {
-    try {
-      await navigator.clipboard.writeText(buildShareLink(projectName.trim(), params))
-      setLinkCopied(true)
-      setTimeout(() => setLinkCopied(false), 2000)
-    } catch {
-      alert('Could not copy the link — your browser blocked clipboard access.')
-    }
-  }
-  const [volume, setVolume] = useState(1000) // cubic mm
-  const [compartmentCount, setCompartmentCount] = useState(4)
-  const [itemWidth, setItemWidth] = useState(50) // mm
-  const [itemDepth, setItemDepth] = useState(30) // mm
-  const [itemHeight, setItemHeight] = useState(10) // mm
-
-  // Collapsible section state - generator sections collapsed by default
-  const [volumeExpanded, setVolumeExpanded] = useState(false)
-  const [compartmentExpanded, setCompartmentExpanded] = useState(false)
-  const [divisionExpanded, setDivisionExpanded] = useState(false)
-
-  // Settings sections — the ones you use most start open
-  const [plateExpanded, setPlateExpanded] = useState(true)
-  const [projectsExpanded, setProjectsExpanded] = useState(true)
-  const [shareExpanded, setShareExpanded] = useState(false)
-
-  // Division Designer state
-  const [divisionSizes, setDivisionSizes] = useState('51, 45, 29') // mm
-  const [divisionWallThickness, setDivisionWallThickness] = useState(2) // mm
+  const [activeTab, setActiveTab] = useState<TabType>('box')
+  const [startFromOpen, setStartFromOpen] = useState(false)
 
   const updateParam = (key: keyof BoxParams, value: number | boolean | string) => {
     const next = { ...params, [key]: value }
@@ -159,106 +129,23 @@ export function ControlPanel({
     })
   }
 
-  const setDivisionCount = (axis: 'divisionsX' | 'divisionsZ', count: number) => {
-    onParamsChange({ ...params, [axis]: evenPositions(count) })
+  // ── Closure: none / lid / sleeve / hinged lid are one choice over three params ──
+  const closure = closureOf(params)
+
+  const setClosure = (c: Closure) => {
+    if (c === closure) return
+    if (c === 'none') onParamsChange({ ...params, includeLid: false })
+    else if (c === 'sleeve') onParamsChange({ ...params, includeLid: true, lidStyle: 'sleeve', includeHinge: false })
+    else onParamsChange({ ...params, includeLid: true, lidStyle: 'lid', includeHinge: c === 'hinged' })
   }
 
-  const setDivisionPosition = (axis: 'divisionsX' | 'divisionsZ', index: number, value: number) => {
-    const arr = [...params[axis]]
-    arr[index] = value
-    onParamsChange({ ...params, [axis]: arr })
-  }
+  const isSleeveStyle = closure === 'sleeve'
+  // Hinged lids are flat — no lip, no tolerance
+  const showTolerance = closure === 'sleeve' || closure === 'lid'
+  const toleranceValue = isSleeveStyle ? params.sleeveTolerance : params.lidTolerance
+  const lipDepth = frictionLipDepth(params)
 
-  const generateFromVolume = () => {
-    // Calculate cube root for roughly cubic proportions, then adjust
-    const side = Math.cbrt(volume)
-    const newParams = {
-      ...params,
-      width: Math.round(side * 1.2), // slightly wider
-      depth: Math.round(side),
-      height: Math.round(side * 0.8), // slightly shorter
-    }
-    onParamsChange(newParams)
-    setActiveTab('box')
-  }
-
-  // Friction-fit cap lids hang their lip down into the box interior, so that
-  // depth is lost to contents when the lid is on. Hinged lids are flat slabs
-  // and sleeves wrap the outside — neither costs interior height.
-  const frictionLipDepth =
-    params.includeLid && params.lidStyle === 'lid' && !params.includeHinge
-      ? params.lidHeight
-      : 0
-
-  const generateFromCompartments = () => {
-    const totalWidth = itemWidth * Math.ceil(Math.sqrt(compartmentCount)) + params.wallThickness * (Math.ceil(Math.sqrt(compartmentCount)) + 1)
-    const totalDepth = itemDepth * Math.ceil(compartmentCount / Math.ceil(Math.sqrt(compartmentCount))) + params.wallThickness * (Math.ceil(compartmentCount / Math.ceil(Math.sqrt(compartmentCount))) + 1)
-    const totalHeight = itemHeight + params.wallThickness + frictionLipDepth
-
-    const newParams = {
-      ...params,
-      width: Math.round(totalWidth),
-      depth: Math.round(totalDepth),
-      height: Math.round(totalHeight),
-      divisionsX: compartmentCount > 1 ? evenPositions(Math.ceil(Math.sqrt(compartmentCount)) - 1) : [],
-      divisionsZ: compartmentCount > Math.ceil(Math.sqrt(compartmentCount)) ? evenPositions(Math.ceil(compartmentCount / Math.ceil(Math.sqrt(compartmentCount))) - 1) : []
-    }
-    onParamsChange(newParams)
-    setActiveTab('box')
-  }
-
-  const resizeBoxToPlate = () => {
-    // Use 80% of the plate to leave margin for brim/supports
-    const maxWidth = Math.round(settings.printerBedX * 0.8)
-    const maxDepth = Math.round(settings.printerBedY * 0.8)
-    const height = Math.round(Math.min(maxWidth, maxDepth) * 0.5)
-    onParamsChange({ ...params, width: maxWidth, depth: maxDepth, height })
-    setActiveTab('box')
-  }
-
-  const generateFromDivisions = () => {
-    try {
-      // Parse division sizes from comma-separated string
-      const divisions = divisionSizes
-        .split(',')
-        .map(s => parseFloat(s.trim()))
-        .filter(n => !isNaN(n) && n > 0)
-
-      if (divisions.length === 0) {
-        alert('Please enter valid division sizes')
-        return
-      }
-
-      // Calculate total depth: sum of divisions + walls
-      const totalDepth = divisions.reduce((sum, div) => sum + div, 0) +
-                        (divisions.length + 1) * divisionWallThickness
-
-      // Calculate division positions as percentages along depth
-      let currentPos = divisionWallThickness
-      const divisionPositions: number[] = []
-
-      for (let i = 0; i < divisions.length - 1; i++) {
-        currentPos += divisions[i] + divisionWallThickness
-        const percentage = Math.round((currentPos / totalDepth) * 100)
-        divisionPositions.push(percentage)
-      }
-
-      const newParams = {
-        ...params,
-        depth: Math.round(totalDepth),
-        wallThickness: divisionWallThickness,
-        divisionThickness: divisionWallThickness,
-        divisionsX: [], // Clear X divisions
-        divisionsZ: divisionPositions,
-      }
-      onParamsChange(newParams)
-      setActiveTab('box')
-    } catch (error) {
-      alert('Error parsing division sizes. Please use format: 51, 48, 30')
-    }
-  }
-
-  // ── Plate fit (Settings tab) ────────────────────────────────────────────────
+  // ── Plate fit ───────────────────────────────────────────────────────────────
   const bedX = settings.printerBedX
   const bedY = settings.printerBedY
   const fitsPlate = (w: number, d: number) =>
@@ -269,1198 +156,565 @@ export function ControlPanel({
     { name: 'Box', w: params.width, d: params.depth },
   ]
   if (params.includeLid) {
-    footprints.push(params.lidStyle === 'sleeve'
+    footprints.push(isSleeveStyle
       ? { name: 'Sleeve', w: +sleeve.w.toFixed(1), d: +sleeve.d.toFixed(1) }
       : { name: 'Lid', w: params.width, d: params.depth })
   }
   const oversized = footprints.filter(f => !fitsPlate(f.w, f.d))
 
-  // Which tolerance the unified slider edits (hinged lids are flat — no lip, no tolerance)
-  const isSleeveStyle = params.lidStyle === 'sleeve'
-  const showTolerance = isSleeveStyle || !params.includeHinge
-  const toleranceValue = isSleeveStyle ? params.sleeveTolerance : params.lidTolerance
-
-  // ── Interior dimensions & compartment maths (help-text readouts) ───────────
+  // ── Interior dimensions & compartment maths (readouts) ─────────────────────
   // Box dims are OUTER; interior loses two walls in X/Z and only the floor in Y
   const innerW = Math.max(0, params.width - 2 * params.wallThickness)
   const innerD = Math.max(0, params.depth - 2 * params.wallThickness)
-  const innerH = Math.max(0, params.height - params.wallThickness - frictionLipDepth)
-  const divT = Math.min(params.divisionThickness, params.wallThickness)
+  const innerH = Math.max(0, params.height - params.wallThickness - lipDepth)
   const fmt = (n: number) => String(Math.round(n * 10) / 10)
+  const compartments = (params.divisionsX.length + 1) * (params.divisionsZ.length + 1)
+  const hasDividers = params.divisionsX.length + params.divisionsZ.length > 0
+  const fullDividerHeight = Math.max(0.5, params.height - params.wallThickness)
 
-  // Clear interior span of each compartment along one axis: divider thickness
-  // straddles its centreline, so it comes out of the neighbouring compartments
-  const compartmentSpans = (positions: number[], inner: number): number[] => {
-    const centers = [...positions].sort((a, b) => a - b).map(p => (p / 100) * inner)
-    const spans: number[] = []
-    let prev = 0
-    for (const c of centers) {
-      spans.push(Math.max(0, c - divT / 2 - prev))
-      prev = c + divT / 2
-    }
-    spans.push(Math.max(0, inner - prev))
-    return spans
-  }
+  const patternLabel = (value: string) => LID_PATTERNS.find(p => p.value === value)?.label ?? value
+  // Dividers the finger slots can reach: X slots notch dividers along the width, Z slots along the depth
+  const hasSlotDividers =
+    ((params.fingerSlotAxes === 'x' || params.fingerSlotAxes === 'both') && params.divisionsX.length > 0) ||
+    ((params.fingerSlotAxes === 'z' || params.fingerSlotAxes === 'both') && params.divisionsZ.length > 0)
+  const fingerLabel = { none: 'None', x: 'X walls', z: 'Z walls', both: 'Both' }[params.fingerSlotAxes]
+
+  const renderPatternControls = (
+    pattern: BoxParams['boxPattern'], size: number, spacing: number,
+    keys: { pattern: keyof BoxParams; size: keyof BoxParams; spacing: keyof BoxParams },
+  ) => (
+    <>
+      <select
+        aria-label="Cutout pattern"
+        value={pattern}
+        onChange={(e) => updateParam(keys.pattern, e.target.value)}
+        className={fieldCls}
+      >
+        {LID_PATTERNS.map(({ value, label }) => (
+          <option key={value} value={value}>{label}</option>
+        ))}
+      </select>
+      {pattern !== 'none' && (
+        <>
+          <SliderField label="Cutout size" unit="mm" min={3} max={25} step={0.5} value={size}
+            onChange={(v) => updateParam(keys.size, v)} />
+          <SliderField label="Cutout spacing" unit="mm" min={2} max={15} step={0.5} value={spacing}
+            onChange={(v) => updateParam(keys.spacing, v)}
+            hint="Wider spacing means a stronger part; larger cutouts save more filament." />
+        </>
+      )}
+    </>
+  )
+
+  const tabs: [TabType, string][] = [['box', 'Box'], ['lid', 'Lid'], ['print', 'Print']]
 
   return (
-    <div className="px-5 pb-5 space-y-5">
+    <div className="px-4 pb-4">
       {/* Tabs — sticky within the sidebar's scroll container */}
-      <div className="sticky top-0 z-10 bg-card pt-4 -mx-5 px-5">
-        <div className="flex border-b">
-          {([
-            ['generator', 'Generator'],
-            ['box', 'Box'],
-            ['lid', 'Lid'],
-            ['settings', 'Settings'],
-          ] as [TabType, string][]).map(([tab, label]) => (
-            <button
-              key={tab}
-              className={`px-3 py-2 font-medium transition-colors ${
-                activeTab === tab
-                  ? 'border-b-2 border-primary text-foreground'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-              onClick={() => setActiveTab(tab)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+      <div className="sticky top-0 z-10 bg-card -mx-4 px-4 mb-4 border-b flex gap-5" role="tablist">
+        {tabs.map(([tab, label]) => (
+          <button
+            key={tab}
+            role="tab"
+            aria-selected={activeTab === tab}
+            className={`py-3 text-sm border-b-2 -mb-px transition-colors ${
+              activeTab === tab
+                ? 'border-primary text-foreground'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            }`}
+            onClick={() => setActiveTab(tab)}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
-      {/* Tab Content */}
-      <div className="space-y-4">
-        {activeTab === 'generator' && (
-          <div className="space-y-6">
-            {/* Volume-based Calculator */}
-            <div className="border rounded-lg overflow-hidden">
-              <button
-                className="w-full p-4 text-left flex justify-between items-center hover:bg-muted/50 transition-colors"
-                onClick={() => setVolumeExpanded(!volumeExpanded)}
-              >
-                <div>
-                  <h3 className="text-lg font-semibold">Volume Calculator</h3>
-                  <p className="text-sm text-muted-foreground">Enter desired volume and generate box dimensions</p>
-                </div>
-                <ChevronDown
-                  className={`h-5 w-5 transition-transform ${
-                    volumeExpanded ? 'rotate-180' : ''
-                  }`}
-                />
-              </button>
+      {activeTab === 'box' && (
+        <div className="space-y-4">
+          <Button variant="secondary" className="w-full justify-start text-muted-foreground" onClick={() => setStartFromOpen(true)}>
+            <Wand2 className="mr-2 h-4 w-4" />
+            Start from volume, items or divisions…
+          </Button>
 
-              {volumeExpanded && (
-                <div className="p-4 border-t space-y-4">
-                  <div className="space-y-2">
-                    <SliderField
-                      label="Volume (cm³)"
-                      min={100}
-                      max={10000}
-                      step={50}
-                      value={volume}
-                      onChange={setVolume}
-                      format={(v) => (v / 1000).toFixed(1)}
-                      parse={(s) => Number(s) * 1000}
-                    />
-                  </div>
-
-                  <p className="text-xs text-muted-foreground">
-                    Sets the box's outer width, depth and height to roughly match this volume, with
-                    slightly-wider-than-tall proportions. The usable interior will be a bit smaller
-                    once walls are subtracted — fine-tune on the Box tab.
-                  </p>
-
-                  <Button onClick={generateFromVolume} className="w-full">
-                    Generate from Volume
-                  </Button>
-                </div>
-              )}
-            </div>
-
-            {/* Compartment Calculator */}
-            <div className="border rounded-lg overflow-hidden">
-              <button
-                className="w-full p-4 text-left flex justify-between items-center hover:bg-muted/50 transition-colors"
-                onClick={() => setCompartmentExpanded(!compartmentExpanded)}
-              >
-                <div>
-                  <h3 className="text-lg font-semibold">Compartment Calculator</h3>
-                  <p className="text-sm text-muted-foreground">Define what items you want to store</p>
-                </div>
-                <ChevronDown
-                  className={`h-5 w-5 transition-transform ${
-                    compartmentExpanded ? 'rotate-180' : ''
-                  }`}
-                />
-              </button>
-
-              {compartmentExpanded && (
-                <div className="p-4 border-t space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label>Item Width (mm)</Label>
-                      <input
-                        type="number"
-                        value={itemWidth}
-                        onChange={(e) => setItemWidth(Number(e.target.value))}
-                        className="w-full px-3 py-2 text-sm rounded-md border bg-background"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Item Depth (mm)</Label>
-                      <input
-                        type="number"
-                        value={itemDepth}
-                        onChange={(e) => setItemDepth(Number(e.target.value))}
-                        className="w-full px-3 py-2 text-sm rounded-md border bg-background"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <SliderField
-                      label="Item Height (mm)"
-                      min={5}
-                      max={50}
-                      step={1}
-                      value={itemHeight}
-                      onChange={setItemHeight}
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <SliderField
-                      label="Number of Compartments"
-                      min={1}
-                      max={16}
-                      step={1}
-                      value={compartmentCount}
-                      onChange={setCompartmentCount}
-                    />
-                  </div>
-
-                  <p className="text-xs text-muted-foreground">
-                    Item sizes are the clear interior space each compartment needs — wall and
-                    divider thickness is added on top automatically, so the generated box is
-                    larger than the items themselves.
-                    {frictionLipDepth > 0 &&
-                      ` The ${params.lidHeight} mm lid lip is also added to the height, so items still fit with the lid on.`}
-                  </p>
-
-                  <Button onClick={generateFromCompartments} className="w-full">
-                    Generate with Compartments
-                  </Button>
-                </div>
-              )}
-            </div>
-
-            {/* Division Designer */}
-            <div className="border rounded-lg overflow-hidden">
-              <button
-                className="w-full p-4 text-left flex justify-between items-center hover:bg-muted/50 transition-colors"
-                onClick={() => setDivisionExpanded(!divisionExpanded)}
-              >
-                <div>
-                  <h3 className="text-lg font-semibold">Division Designer</h3>
-                  <p className="text-sm text-muted-foreground">Specify exact division depths and wall thickness</p>
-                </div>
-                <ChevronDown
-                  className={`h-5 w-5 transition-transform ${
-                    divisionExpanded ? 'rotate-180' : ''
-                  }`}
-                />
-              </button>
-
-              {divisionExpanded && (
-                <div className="p-4 border-t space-y-4">
-                  <div className="space-y-2">
-                    <Label>Division Depths (mm)</Label>
-                    <input
-                      type="text"
-                      value={divisionSizes}
-                      onChange={(e) => setDivisionSizes(e.target.value)}
-                      placeholder="51, 48, 30"
-                      className="w-full px-3 py-2 text-sm rounded-md border bg-background"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Enter comma-separated depths (e.g., 51, 48, 30). Each number is the clear
-                      interior size of one compartment, front to back — walls are added between
-                      and around them, so the box's total depth ends up larger.
-                    </p>
-                  </div>
-
-                  <div className="space-y-2">
-                    <SliderField
-                      label="Wall Thickness (mm)"
-                      min={1}
-                      max={5}
-                      step={0.5}
-                      value={divisionWallThickness}
-                      onChange={setDivisionWallThickness}
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Used for both the outer walls and the dividers when generating.
-                    </p>
-                  </div>
-
-                  {/* Preview calculation */}
-                  {(() => {
-                    try {
-                      const divisions = divisionSizes
-                        .split(',')
-                        .map(s => parseFloat(s.trim()))
-                        .filter(n => !isNaN(n) && n > 0)
-
-                      if (divisions.length > 0) {
-                        const totalDepth = divisions.reduce((sum, div) => sum + div, 0) +
-                                          (divisions.length + 1) * divisionWallThickness
-                        return (
-                          <div className="p-3 bg-muted rounded text-sm">
-                            <p><strong>Preview:</strong></p>
-                            <p>Compartments (inside): {divisions.join('mm, ')}mm</p>
-                            <p>
-                              Total outer depth: {Math.round(totalDepth)}mm
-                              {' '}({divisions.length} compartments + {divisions.length + 1} walls
-                              of {divisionWallThickness}mm)
-                            </p>
-                          </div>
-                        )
-                      }
-                    } catch {}
-                    return null
-                  })()}
-
-                  <Button onClick={generateFromDivisions} className="w-full">
-                    Generate with Divisions
-                  </Button>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'box' && (
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>Dimensions are</Label>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  className={`px-3 py-1.5 text-sm rounded-md border ${!isInteriorMode ? 'bg-primary text-primary-foreground' : 'bg-background'}`}
-                  onClick={() => setDimensionMode('exterior')}
-                >
-                  Exterior
-                </button>
-                <button
-                  className={`px-3 py-1.5 text-sm rounded-md border ${isInteriorMode ? 'bg-primary text-primary-foreground' : 'bg-background'}`}
-                  onClick={() => setDimensionMode('interior')}
-                >
-                  Interior (fit contents)
-                </button>
-              </div>
-              <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
-                <p>The outer size — walls are included in it, nothing gets added on top.</p>
-                <p>Measured your contents? Enter that size — walls get added on top to fit it.</p>
-              </div>
-            </div>
-
-            {isInteriorMode && (
-              <div className="space-y-2">
+          <div className="space-y-0">
+            <Group title="Size" defaultOpen summary={`${fmt(params.width)}×${fmt(params.depth)}×${fmt(params.height)} mm`}>
+              <Segmented
+                aria-label="Dimensions are"
+                value={params.dimensionMode}
+                onChange={setDimensionMode}
+                options={[
+                  { value: 'exterior', label: 'Outer size' },
+                  { value: 'interior', label: 'Inner cavity' },
+                ]}
+              />
+              {isInteriorMode && (
                 <SliderField
-                  label="Tolerance (mm)"
+                  label="Tolerance"
+                  unit="mm"
                   min={0}
                   max={10}
                   step={0.1}
                   value={params.interiorTolerance}
                   onChange={setInteriorTolerance}
+                  hint="Extra clearance added to the cavity on top of the size you enter. Raise it for loose contents, lower it (even to 0) for a snug fit."
                 />
-                <p className="text-xs text-muted-foreground">
-                  Extra clearance added to the cavity on top of the size you enter — raise it if the
-                  contents should sit loose, lower it (even to 0) for a snug fit.
-                </p>
-              </div>
-            )}
-
-            <div className="space-y-2">
+              )}
               <SliderField
-                label={isInteriorMode ? 'Width, interior (mm)' : 'Width (mm)'}
+                label={isInteriorMode ? 'Width, inside' : 'Width'}
+                unit="mm"
+                color={AXIS.width}
                 min={isInteriorMode ? 1 : 10}
                 max={isInteriorMode
-                  ? Math.max(1, (settings.printerBedX > 0 ? settings.printerBedX : 200) - wallTerm('width') - params.interiorTolerance)
-                  : (settings.printerBedX > 0 ? settings.printerBedX : 200)}
+                  ? Math.max(1, (bedX > 0 ? bedX : 200) - wallTerm('width') - params.interiorTolerance)
+                  : (bedX > 0 ? bedX : 200)}
                 step={0.5}
                 value={dimensionDisplayValue('width')}
                 onChange={(value) => setDimension('width', value)}
               />
-            </div>
-
-            <div className="space-y-2">
               <SliderField
-                label={isInteriorMode ? 'Depth, interior (mm)' : 'Depth (mm)'}
+                label={isInteriorMode ? 'Depth, inside' : 'Depth'}
+                unit="mm"
+                color={AXIS.depth}
                 min={isInteriorMode ? 1 : 10}
                 max={isInteriorMode
-                  ? Math.max(1, (settings.printerBedY > 0 ? settings.printerBedY : 200) - wallTerm('depth') - params.interiorTolerance)
-                  : (settings.printerBedY > 0 ? settings.printerBedY : 200)}
+                  ? Math.max(1, (bedY > 0 ? bedY : 200) - wallTerm('depth') - params.interiorTolerance)
+                  : (bedY > 0 ? bedY : 200)}
                 step={0.5}
                 value={dimensionDisplayValue('depth')}
                 onChange={(value) => setDimension('depth', value)}
               />
-            </div>
-
-            <div className="space-y-2">
               <SliderField
-                label={isInteriorMode ? 'Height, interior (mm)' : 'Height (mm)'}
+                label={isInteriorMode ? 'Height, inside' : 'Height'}
+                unit="mm"
+                color={AXIS.height}
                 min={isInteriorMode ? 1 : 10}
                 max={isInteriorMode ? Math.max(1, 200 - wallTerm('height') - params.interiorTolerance) : 200}
                 step={0.5}
                 value={dimensionDisplayValue('height')}
                 onChange={(value) => setDimension('height', value)}
               />
-            </div>
+              <div
+                className="rounded-md border bg-background/40 px-3 py-2 text-xs text-muted-foreground"
+                title={`Sides lose two ${params.wallThickness} mm walls; the height loses the floor${lipDepth > 0 ? ` and the ${params.lidHeight} mm lid lip` : ''}.`}
+              >
+                {isInteriorMode ? 'Outer size' : 'Usable interior'}{' '}
+                <span className="font-mono text-foreground">
+                  {isInteriorMode
+                    ? `${fmt(params.width)} × ${fmt(params.depth)} × ${fmt(params.height)}`
+                    : `${fmt(innerW)} × ${fmt(innerD)} × ${fmt(innerH)}`}
+                </span>{' '}
+                mm
+                {isInteriorMode && (
+                  <> · interior <span className="font-mono text-foreground">{fmt(innerW)} × {fmt(innerD)} × {fmt(innerH)}</span></>
+                )}
+                {lipDepth > 0 && <> · {params.lidHeight} mm lid lip included</>}
+              </div>
+            </Group>
 
-            <div className="p-3 bg-muted rounded text-xs text-muted-foreground space-y-1">
-              {isInteriorMode ? (
-                <p>
-                  Outer size comes out to <strong>{fmt(params.width)} × {fmt(params.depth)} × {fmt(params.height)} mm</strong>{' '}
-                  (W × D × H) — the {fmt(params.wallThickness)} mm walls and the {params.interiorTolerance} mm
-                  tolerance are added on top of the cavity size you entered.
-                </p>
-              ) : (
-                <p>
-                  Width, depth and height are <strong>outer</strong> dimensions — the walls are
-                  included in them, not added on top.
-                </p>
-              )}
-              <p>
-                Usable interior: <strong>{fmt(innerW)} × {fmt(innerD)} × {fmt(innerH)} mm</strong>{' '}
-                (W × D × H). The sides lose two {params.wallThickness} mm walls; the height loses
-                the floor{frictionLipDepth > 0
-                  ? <> and the {params.lidHeight} mm lid lip that hangs into the box when the lid is on</>
-                  : params.includeLid
-                    ? ' only — hinged lids are flat and sleeves wrap the outside, so no height is lost to a lip'
-                    : ', since the top is open'}.
-              </p>
-            </div>
-
-            <div className="space-y-2">
+            <Group
+              title="Dividers"
+              defaultOpen
+              summary={`${compartments} compartment${compartments === 1 ? '' : 's'}`}
+            >
+              <DividerEditor params={params} onChange={(patch) => onParamsChange({ ...params, ...patch })} />
               <SliderField
-                label="Wall Thickness (mm)"
-                min={1}
-                max={10}
-                step={0.5}
-                value={params.wallThickness}
-                onChange={setWallThickness}
-              />
-              <p className="text-xs text-muted-foreground">
-                Thickness of the four outer walls and the floor.{' '}
-                {isInteriorMode
-                  ? 'In interior mode the outer size grows or shrinks with it, so the cavity size above stays put.'
-                  : 'Increasing it keeps the outer size the same and shrinks the interior.'}
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <SliderField
-                label="Divider Thickness (mm)"
+                label="Divider"
+                unit="mm"
                 min={0.4}
                 max={params.wallThickness}
                 step={0.2}
                 value={params.divisionThickness}
                 onChange={(value) => updateParam('divisionThickness', value)}
+                hint={`Thickness of the internal dividers. Capped at the wall thickness (${params.wallThickness} mm).`}
               />
-              <p className="text-xs text-muted-foreground">
-                Thickness of the internal divider walls. Capped at the outer wall thickness ({params.wallThickness} mm) so dividers are never thicker than the box itself.
-              </p>
-            </div>
+              {hasDividers && (
+                <SliderField
+                  label="Divider height"
+                  unit="mm"
+                  min={Math.min(1, fullDividerHeight)}
+                  max={fullDividerHeight}
+                  step={0.5}
+                  value={dividerHeightMm(params)}
+                  onChange={(value) => updateParam('dividerHeight', value >= fullDividerHeight - 0.01 ? 0 : value)}
+                  suffix={params.dividerHeight <= 0 ? <span>full</span> : undefined}
+                  hint="Measured from the floor. Full height is flush with the box top; lower dividers sit below the rim, so contents can overhang them and a lid's lip clears them."
+                />
+              )}
+            </Group>
 
-            <div className="space-y-2">
+            <Group title="Walls" summary={`${fmt(params.wallThickness)} mm`}>
               <SliderField
-                label="Chamfer (mm)"
+                label="Wall"
+                unit="mm"
+                min={1}
+                max={10}
+                step={0.5}
+                value={params.wallThickness}
+                onChange={setWallThickness}
+                hint={isInteriorMode
+                  ? 'Thickness of the outer walls and the floor. In inner-cavity mode the outer size grows with it, so the cavity stays put.'
+                  : 'Thickness of the outer walls and the floor. Thicker walls shrink the interior; the outer size stays the same.'}
+              />
+              <SliderField
+                label="Chamfer"
+                unit="mm"
                 min={0}
                 max={Math.min(params.wallThickness, params.width / 4, params.depth / 4)}
                 step={0.5}
                 value={params.chamferSize}
                 onChange={(value) => updateParam('chamferSize', value)}
+                hint="45° bevel on the four outer vertical edges. Cosmetic only; 0 keeps square corners."
               />
-              <p className="text-xs text-muted-foreground">
-                45° bevel on the four outer vertical edges. Cosmetic only — the interior is
-                unaffected. 0 keeps square corners.
-              </p>
-            </div>
+            </Group>
 
-            <div className="space-y-2">
-              <SliderField
-                label="X Divisions"
-                min={0}
-                max={10}
-                step={1}
-                value={params.divisionsX.length}
-                onChange={(value) => setDivisionCount('divisionsX', value)}
-              />
-              <p className="text-xs text-muted-foreground">
-                Vertical walls that split the interior along the width. Each position is a % across
-                the {fmt(innerW)} mm interior, measured from the inside of the left wall to the
-                divider's centreline.
-              </p>
-              {params.divisionsX.map((pos, i) => (
-                <div key={i} className="space-y-1 pl-4">
-                  <SliderField
-                    labelClassName="text-xs"
-                    label={`X Divider ${i + 1} (%)`}
-                    min={1}
-                    max={99}
-                    step={1}
-                    value={pos}
-                    onChange={(value) => setDivisionPosition('divisionsX', i, value)}
-                    suffix={<span className="text-xs text-muted-foreground">% · {fmt((pos / 100) * innerW)} mm</span>}
-                  />
-                </div>
-              ))}
-              {params.divisionsX.length > 0 && (
-                <p className="text-xs text-muted-foreground pl-4">
-                  Compartment widths (clear inside): {compartmentSpans(params.divisionsX, innerW).map(fmt).join(' · ')} mm.
-                  The {divT} mm divider thickness comes out of the compartments.
-                </p>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <SliderField
-                label="Z Divisions"
-                min={0}
-                max={10}
-                step={1}
-                value={params.divisionsZ.length}
-                onChange={(value) => setDivisionCount('divisionsZ', value)}
-              />
-              <p className="text-xs text-muted-foreground">
-                Walls that split the interior along the depth. Each position is a % across the
-                {' '}{fmt(innerD)} mm interior, measured from the inside of the front wall to the
-                divider's centreline.
-              </p>
-              {params.divisionsZ.map((pos, i) => (
-                <div key={i} className="space-y-1 pl-4">
-                  <SliderField
-                    labelClassName="text-xs"
-                    label={`Z Divider ${i + 1} (%)`}
-                    min={1}
-                    max={99}
-                    step={1}
-                    value={pos}
-                    onChange={(value) => setDivisionPosition('divisionsZ', i, value)}
-                    suffix={<span className="text-xs text-muted-foreground">% · {fmt((pos / 100) * innerD)} mm</span>}
-                  />
-                </div>
-              ))}
-              {params.divisionsZ.length > 0 && (
-                <p className="text-xs text-muted-foreground pl-4">
-                  Compartment depths (clear inside): {compartmentSpans(params.divisionsZ, innerD).map(fmt).join(' · ')} mm.
-                  The {divT} mm divider thickness comes out of the compartments.
-                </p>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <Label>Finger Slots</Label>
-              <div className="grid grid-cols-4 gap-2">
-                {([
-                  { value: 'none', label: 'None' },
-                  { value: 'x', label: 'X Walls' },
-                  { value: 'z', label: 'Z Walls' },
-                  { value: 'both', label: 'Both' },
-                ] as const).map(({ value, label }) => (
-                  <button
-                    key={value}
-                    className={`px-2 py-1.5 text-sm rounded-md border ${params.fingerSlotAxes === value ? 'bg-primary text-primary-foreground' : 'bg-background'}`}
-                    onClick={() => updateParam('fingerSlotAxes', value)}
-                  >
-                    {label}
-                  </button>
-                ))}
+            <Group
+              title="Details"
+              summary={[
+                params.fingerSlotAxes !== 'none' ? `Finger slots: ${fingerLabel}` : null,
+                params.boxPattern !== 'none' ? patternLabel(params.boxPattern) : null,
+              ].filter(Boolean).join(' · ') || 'No slots · no cutouts'}
+            >
+              <div className="space-y-2">
+                <span className={labelCls} title="Notches cut down from the top edge so you can pinch cards or flat items out of each compartment.">
+                  Finger slots
+                </span>
+                <Segmented
+                  aria-label="Finger slots"
+                  value={params.fingerSlotAxes}
+                  onChange={(value) => updateParam('fingerSlotAxes', value)}
+                  options={[
+                    { value: 'none', label: 'None' },
+                    { value: 'x', label: 'X walls' },
+                    { value: 'z', label: 'Z walls' },
+                    { value: 'both', label: 'Both' },
+                  ]}
+                />
+                {hasHinge(params) && params.fingerSlotAxes !== 'none' && params.fingerSlotWalls && (
+                  <p className="text-xs text-muted-foreground">With a hinge, the back wall stays solid.</p>
+                )}
               </div>
-              <p className="text-xs text-muted-foreground">
-                Notches cut down from the top edge so you can pinch cards or other flat
-                items out of each compartment. X Walls notches the left/right walls and every X
-                divider; Z Walls notches the front/back walls and every Z divider. Where a
-                crossing divider splits a wall, each open span gets its own notch, kept clear
-                of corners and divider junctions.
-                {params.includeHinge && ' With a hinge, the back wall stays solid.'}
-              </p>
-
               {params.fingerSlotAxes !== 'none' && (
-                <div className="space-y-4 pt-1">
-                  {(((params.fingerSlotAxes === 'x' || params.fingerSlotAxes === 'both') && params.divisionsX.length > 0) ||
-                    ((params.fingerSlotAxes === 'z' || params.fingerSlotAxes === 'both') && params.divisionsZ.length > 0)) && (
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={params.fingerSlotDividers}
-                        onChange={(e) => updateParam('fingerSlotDividers', e.target.checked)}
-                        className="h-4 w-4 rounded border-gray-300"
-                      />
-                      <span className="text-sm">Notch divider walls too</span>
-                    </label>
+                <>
+                  <SwitchRow
+                    label="Notch outer walls"
+                    checked={params.fingerSlotWalls}
+                    onChange={(v) => updateParam('fingerSlotWalls', v)}
+                  />
+                  {hasSlotDividers && (
+                    <SwitchRow
+                      label="Notch divider walls"
+                      checked={params.fingerSlotDividers}
+                      onChange={(v) => updateParam('fingerSlotDividers', v)}
+                    />
                   )}
-                  <div className="space-y-2">
-                    <SliderField
-                      label="Slot Width (mm)"
-                      min={5}
-                      max={60}
-                      step={1}
-                      value={params.fingerSlotWidth}
-                      onChange={(value) => updateParam('fingerSlotWidth', value)}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <SliderField
-                      label="Slot Depth (mm)"
-                      min={2}
-                      max={Math.max(2, params.height - params.wallThickness - 0.5)}
-                      step={0.5}
-                      value={params.fingerSlotDepth}
-                      onChange={(value) => updateParam('fingerSlotDepth', value)}
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      How far down from the top edge the notch reaches. It always stops just above the floor.
+                  {!params.fingerSlotWalls && !(hasSlotDividers && params.fingerSlotDividers) && (
+                    <p className="text-xs text-amber-400">
+                      Nothing to notch yet.{' '}
+                      {hasSlotDividers ? 'Turn on the outer walls or the divider walls.' : 'Turn on the outer walls, or add dividers on these axes.'}
                     </p>
-                  </div>
-                  <div className="space-y-2">
-                    <SliderField
-                      label="Slot Position (%)"
-                      min={0}
-                      max={100}
-                      step={1}
-                      value={params.fingerSlotPosition}
-                      onChange={(value) => updateParam('fingerSlotPosition', value)}
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Where each notch sits along its open span — 50% is centred. With crossing
-                      dividers the position applies within each compartment's span.
-                    </p>
-                  </div>
-                </div>
+                  )}
+                  <SwitchRow
+                    label="Rounded bottom"
+                    checked={params.fingerSlotRound}
+                    onChange={(v) => updateParam('fingerSlotRound', v)}
+                  />
+                  <SliderField label="Slot width" unit="mm" min={5} max={60} value={params.fingerSlotWidth}
+                    onChange={(value) => updateParam('fingerSlotWidth', value)} />
+                  <SliderField label="Slot depth" unit="mm" min={2}
+                    max={Math.max(2, params.height - params.wallThickness - 0.5)} step={0.5}
+                    value={params.fingerSlotDepth}
+                    onChange={(value) => updateParam('fingerSlotDepth', value)}
+                    hint="How far down from the top edge the notch reaches. It always stops just above the floor." />
+                  <SliderField label="Slot position" unit="%" min={0} max={100} value={params.fingerSlotPosition}
+                    onChange={(value) => updateParam('fingerSlotPosition', value)}
+                    hint="Where each notch sits along its open span; 50% is centred." />
+                </>
               )}
-            </div>
 
-            <div className="space-y-2">
-              <Label>Cutout Pattern</Label>
-              <div className="grid grid-cols-4 gap-2">
-                {LID_PATTERNS.map(({ value, label }) => (
-                  <button
-                    key={value}
-                    className={`px-2 py-1.5 text-sm rounded-md border ${params.boxPattern === value ? 'bg-primary text-primary-foreground' : 'bg-background'}`}
-                    onClick={() => updateParam('boxPattern', value)}
-                  >
-                    {label}
-                  </button>
-                ))}
+              <div className="space-y-2 pt-1">
+                <span className={labelCls} title="Holes cut through the side walls and floor to save filament.">Cutout pattern</span>
+                {renderPatternControls(params.boxPattern, params.boxPatternSize, params.boxPatternSpacing,
+                  { pattern: 'boxPattern', size: 'boxPatternSize', spacing: 'boxPatternSpacing' })}
+                {params.boxPattern !== 'none' && (
+                  <SwitchRow
+                    label="Cutouts in the floor"
+                    checked={params.boxPatternFloor}
+                    onChange={(v) => updateParam('boxPatternFloor', v)}
+                  />
+                )}
+                {params.boxPattern !== 'none' && hasDividers && (
+                  <SwitchRow
+                    label="Cutouts in the dividers"
+                    checked={params.boxPatternDividers}
+                    onChange={(v) => updateParam('boxPatternDividers', v)}
+                  />
+                )}
+                {hasHinge(params) && params.boxPattern !== 'none' && (
+                  <p className="text-xs text-muted-foreground">The back wall stays solid to support the hinge.</p>
+                )}
               </div>
-              <p className="text-xs text-muted-foreground">
-                Holes cut through the box's side walls and floor to save filament.
-                {params.includeHinge && ' The back wall stays solid to support the hinge.'}
-              </p>
-
-              {params.boxPattern !== 'none' && (
-                <div className="space-y-4 pt-1">
-                  <div className="space-y-2">
-                    <SliderField
-                      label="Cutout Size (mm)"
-                      min={3}
-                      max={25}
-                      step={0.5}
-                      value={params.boxPatternSize}
-                      onChange={(value) => updateParam('boxPatternSize', value)}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <SliderField
-                      label="Cutout Spacing (mm)"
-                      min={2}
-                      max={15}
-                      step={0.5}
-                      value={params.boxPatternSpacing}
-                      onChange={(value) => updateParam('boxPatternSpacing', value)}
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Wider spacing means a stronger part; larger cutouts save more filament.
-                    </p>
-                  </div>
-                </div>
-              )}
-            </div>
+            </Group>
           </div>
-        )}
+        </div>
+      )}
 
-        {activeTab === 'lid' && (
-          <div className="space-y-4">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={params.includeLid}
-                onChange={(e) => updateParam('includeLid', e.target.checked)}
-                className="h-4 w-4 rounded border-gray-300"
+      {activeTab === 'lid' && (
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <span className={labelCls}>Closure</span>
+            <Segmented
+              aria-label="Closure"
+              value={closure}
+              onChange={setClosure}
+              options={[
+                { value: 'none', label: 'None' },
+                { value: 'lid', label: 'Lid' },
+                { value: 'sleeve', label: 'Sleeve' },
+                { value: 'hinged', label: 'Hinged' },
+              ]}
+            />
+            <p className="text-xs text-muted-foreground">
+              {{
+                none: 'Open top.',
+                lid: 'A cap that sits on top of the box.',
+                sleeve: 'An open-front cover the box slides in and out of, like a matchbox drawer.',
+                hinged: 'A flat lid that snaps onto hinge knuckles on the back edge. Nothing extra to print.',
+              }[closure]}
+            </p>
+          </div>
+
+          {closure !== 'none' && (
+            <>
+              <SwitchRow
+                label={isSleeveStyle ? 'Preview box inside sleeve' : 'Preview lid in place'}
+                checked={previewInPlace}
+                onChange={onPreviewInPlaceChange}
               />
-              <span className="text-sm">Generate lid / sleeve</span>
-            </label>
 
-            {params.includeLid && (
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <Label>Style</Label>
-                  <div className="flex gap-2">
-                    <button
-                      className={`flex-1 px-3 py-1.5 text-sm rounded-md border ${params.lidStyle === 'lid' ? 'bg-primary text-primary-foreground' : 'bg-background'}`}
-                      onClick={() => updateParam('lidStyle', 'lid')}
-                    >
-                      Lid
-                    </button>
-                    <button
-                      className={`flex-1 px-3 py-1.5 text-sm rounded-md border ${params.lidStyle === 'sleeve' ? 'bg-primary text-primary-foreground' : 'bg-background'}`}
-                      onClick={() => updateParam('lidStyle', 'sleeve')}
-                    >
-                      Drawer Sleeve
-                    </button>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    {isSleeveStyle
-                      ? 'An open-front cover the box slides in and out of, like a matchbox drawer.'
-                      : 'A cap that sits on top of the box.'}
-                  </p>
-                </div>
-
-                {/* Common options for both styles */}
-                <div className="space-y-1">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={previewInPlace}
-                      onChange={(e) => onPreviewInPlaceChange(e.target.checked)}
-                      className="h-4 w-4 rounded border-gray-300"
-                    />
-                    <span className="text-sm">
-                      {isSleeveStyle ? 'Preview box inside sleeve' : 'Preview lid in place'}
-                    </span>
-                  </label>
-                  <p className="text-xs text-muted-foreground pl-6">
-                    {isSleeveStyle
-                      ? 'Shows the box slid into the sleeve.'
-                      : params.includeHinge
-                        ? 'Shows the lid closed on the box with the hinge assembled.'
-                        : 'Shows the lid flipped and closed on the box.'}
-                    {' '}Preview only — exported STLs are not affected.
-                  </p>
-                </div>
-
+              <div className="space-y-0">
                 {showTolerance && (
-                  <div className="space-y-2">
-                    <SliderField
-                      label="Fit Tolerance (mm)"
-                      min={0.1}
-                      max={1}
-                      step={0.05}
-                      value={toleranceValue}
-                      onChange={(value) => updateParam(isSleeveStyle ? 'sleeveTolerance' : 'lidTolerance', value)}
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      {isSleeveStyle
-                        ? 'Gap between the box and the sleeve interior — lower means a tighter fit. Increase it if the box is hard to slide.'
-                        : "Gap between the lid's lip and the box walls — lower means a tighter fit. Increase it if the lid is hard to put on or take off."}
-                    </p>
-                  </div>
-                )}
-
-                {/* Cutout pattern — common to both styles */}
-                <div className="space-y-2">
-                  <Label>Cutout Pattern</Label>
-                  <div className="grid grid-cols-4 gap-2">
-                    {LID_PATTERNS.map(({ value, label }) => (
-                      <button
-                        key={value}
-                        className={`px-2 py-1.5 text-sm rounded-md border ${params.lidPattern === value ? 'bg-primary text-primary-foreground' : 'bg-background'}`}
-                        onClick={() => updateParam('lidPattern', value)}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    {isSleeveStyle
-                      ? 'Holes cut through the sleeve\'s top, bottom, side, and back walls to save filament.'
-                      : 'Holes cut through the lid to save filament.'}
-                    {' '}Text always keeps a solid patch around it.
-                  </p>
-
-                  {params.lidPattern !== 'none' && (
-                    <div className="space-y-4 pt-1">
-                      <div className="space-y-2">
-                        <SliderField
-                          label="Cutout Size (mm)"
-                          min={3}
-                          max={25}
-                          step={0.5}
-                          value={params.lidPatternSize}
-                          onChange={(value) => updateParam('lidPatternSize', value)}
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <SliderField
-                          label="Cutout Spacing (mm)"
-                          min={2}
-                          max={15}
-                          step={0.5}
-                          value={params.lidPatternSpacing}
-                          onChange={(value) => updateParam('lidPatternSpacing', value)}
-                        />
-                        <p className="text-xs text-muted-foreground">
-                          Wider spacing means a stronger part; larger cutouts save more filament.
-                        </p>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* Lid-only options */}
-                {params.lidStyle === 'lid' && !params.includeHinge && (
-                  <div className="space-y-2">
-                    <SliderField
-                      label="Lip Height (mm)"
-                      min={2}
-                      max={20}
-                      step={0.5}
-                      value={params.lidHeight}
-                      onChange={(value) => updateParam('lidHeight', value)}
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      How far the lid's inner lip reaches down into the box. A taller lip grips
-                      better, but it hangs into the interior — leave room above your contents.
-                    </p>
-                  </div>
-                )}
-
-                {params.lidStyle === 'lid' && (
-                  <div className="pt-3 border-t space-y-4">
-                    <h4 className="text-sm font-semibold">Hinge</h4>
-
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={params.includeHinge}
-                        onChange={(e) => updateParam('includeHinge', e.target.checked)}
-                        className="h-4 w-4 rounded border-gray-300"
+                  <Group
+                    title="Fit"
+                    defaultOpen
+                    summary={`${toleranceValue} mm tolerance`}
+                  >
+                    {showTolerance && (
+                      <SliderField
+                        label="Fit tolerance"
+                        unit="mm"
+                        min={0.1}
+                        max={1}
+                        step={0.05}
+                        value={toleranceValue}
+                        onChange={(value) => updateParam(isSleeveStyle ? 'sleeveTolerance' : 'lidTolerance', value)}
+                        hint={isSleeveStyle
+                          ? 'Gap between the box and the sleeve interior. Lower is tighter; raise it if the box is hard to slide.'
+                          : "Gap between the lid's lip and the box walls. Lower is tighter; raise it if the lid is hard to put on."}
                       />
-                      <span className="text-sm">Add snap hinges</span>
-                    </label>
-
-                    {params.includeHinge && (
-                      <div className="space-y-4 pl-2">
-                        <div className="space-y-2">
-                          <SliderField
-                            label="Number of hinges"
-                            min={1}
-                            max={3}
-                            step={1}
-                            value={params.hingeCount}
-                            onChange={(value) => updateParam('hingeCount', value)}
-                          />
-                        </div>
-
-                        <div className="space-y-2">
-                          <SliderField
-                            label="Barrel diameter (mm)"
-                            min={6}
-                            max={14}
-                            step={0.5}
-                            value={params.hingeDiameter}
-                            onChange={(value) => updateParam('hingeDiameter', value)}
-                          />
-                          <p className="text-xs text-muted-foreground">
-                            Outer diameter of the hinge knuckles on the box's back edge.
-                          </p>
-                        </div>
-
-                        <div className="space-y-2">
-                          <SliderField
-                            label="Axle diameter (mm)"
-                            min={2}
-                            max={5}
-                            step={0.5}
-                            value={params.hingePinDiameter}
-                            onChange={(value) => updateParam('hingePinDiameter', value)}
-                          />
-                          <p className="text-xs text-muted-foreground">
-                            Diameter of the snap axles on the lid knuckle. Thicker is stronger but needs more force to click in.
-                          </p>
-                        </div>
-
-                        <p className="text-xs text-muted-foreground">
-                          Pin-less snap hinge on the back edge: press the lid's axle stubs straight down into the box knuckles until they click — nothing extra to print. Pull the lid straight up (open flat) to remove it. Hinged lids are flat, with no inner lip.
-                        </p>
-                      </div>
                     )}
-                  </div>
-                )}
-
-                {/* Sleeve-only options */}
-                {isSleeveStyle && (
-                  <div className="space-y-2">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={params.sleeveCutout}
-                        onChange={(e) => updateParam('sleeveCutout', e.target.checked)}
-                        className="h-4 w-4 rounded border-gray-300"
+                    {closure === 'lid' && (
+                      <SliderField
+                        label="Lip height"
+                        unit="mm"
+                        min={2}
+                        max={20}
+                        step={0.5}
+                        value={params.lidHeight}
+                        onChange={(value) => updateParam('lidHeight', value)}
+                        hint="How far the lid's inner lip reaches down into the box. A taller lip grips better but takes interior space."
                       />
-                      <span className="text-sm">Finger cutout at the opening</span>
-                    </label>
-                    <p className="text-xs text-muted-foreground pl-6">
-                      Adds semicircular notches to the top and bottom walls at the opening so you can pinch the box to slide it out — helpful for heavy contents. Print the sleeve standing on its closed back for a clean opening.
-                    </p>
-                  </div>
+                    )}
+                    {isSleeveStyle && (
+                      <SwitchRow
+                        label="Finger cutout at the opening"
+                        checked={params.sleeveCutout}
+                        onChange={(v) => updateParam('sleeveCutout', v)}
+                      />
+                    )}
+                  </Group>
                 )}
 
-                {/* Text — common to both styles */}
-                <div className="pt-3 border-t space-y-4">
-                  <h4 className="text-sm font-semibold">Text / Emoji</h4>
-                  <p className="text-xs text-muted-foreground -mt-2">
+                {closure === 'hinged' && (
+                  <Group title="Hinge" defaultOpen summary={`${params.hingeCount} hinge${params.hingeCount === 1 ? '' : 's'}`}>
+                    <SliderField label="Number of hinges" min={1} max={3} value={params.hingeCount}
+                      onChange={(value) => updateParam('hingeCount', value)} />
+                    <SliderField label="Barrel diameter" unit="mm" min={6} max={14} step={0.5} value={params.hingeDiameter}
+                      onChange={(value) => updateParam('hingeDiameter', value)}
+                      hint="Outer diameter of the hinge knuckles on the box's back edge." />
+                    <SliderField label="Axle diameter" unit="mm" min={2} max={5} step={0.5} value={params.hingePinDiameter}
+                      onChange={(value) => updateParam('hingePinDiameter', value)}
+                      hint="Diameter of the snap axles on the lid. Thicker is stronger but needs more force to click in." />
+                    <p className="text-xs text-muted-foreground">
+                      Press the lid's axle stubs straight down into the box knuckles until they click. Pull straight up to remove.
+                    </p>
+                  </Group>
+                )}
+
+                <Group
+                  title="Cutouts"
+                  summary={params.lidPattern === 'none' ? 'None' : patternLabel(params.lidPattern)}
+                >
+                  {renderPatternControls(params.lidPattern, params.lidPatternSize, params.lidPatternSpacing,
+                    { pattern: 'lidPattern', size: 'lidPatternSize', spacing: 'lidPatternSpacing' })}
+                  <p className="text-xs text-muted-foreground">Text always keeps a solid patch around it.</p>
+                </Group>
+
+                <Group
+                  title="Text"
+                  summary={params.lidText.trim() ? `“${params.lidText.trim()}”` : 'None'}
+                >
+                  <p className="text-xs text-muted-foreground">
                     {isSleeveStyle
                       ? 'Engraved or embossed on the top wall of the sleeve.'
-                      : params.includeHinge
-                        ? 'Engraved or embossed on the top of the lid.'
-                        : 'Engraved or embossed on the top of the lid (pre-mirrored for the flip).'}
+                      : 'Engraved or embossed on the top of the lid.'}
                   </p>
-
+                  <input
+                    type="text"
+                    aria-label="Text or emoji"
+                    value={params.lidText}
+                    onChange={(e) => updateParam('lidText', e.target.value)}
+                    placeholder="Text or emoji"
+                    className={fieldCls}
+                  />
+                  <SliderField label="Text size" unit="mm" min={8} max={40} value={params.lidTextSize}
+                    onChange={(value) => updateParam('lidTextSize', value)} />
+                  <SliderField label="Text depth" unit="mm" min={0.3} max={2} step={0.1} value={params.lidTextDepth}
+                    onChange={(value) => updateParam('lidTextDepth', value)} />
+                  <Segmented
+                    aria-label="Text style"
+                    value={params.lidTextStyle}
+                    onChange={(value) => updateParam('lidTextStyle', value)}
+                    options={[
+                      { value: 'engraved', label: 'Engraved' },
+                      { value: 'embossed', label: 'Embossed' },
+                    ]}
+                  />
                   <div className="space-y-2">
-                    <Label>Text</Label>
-                    <input
-                      type="text"
-                      value={params.lidText}
-                      onChange={(e) => updateParam('lidText', e.target.value)}
-                      placeholder="Enter text or emoji..."
-                      className="w-full px-3 py-2 text-sm rounded-md border bg-background"
+                    <span className={labelCls} title="At 90° or 270° the text runs along the depth instead of the width.">Rotation</span>
+                    <Segmented
+                      aria-label="Text rotation"
+                      value={params.lidTextRotation}
+                      onChange={(value) => updateParam('lidTextRotation', value)}
+                      options={[0, 90, 180, 270].map((deg) => ({ value: deg, label: `${deg}°` }))}
                     />
                   </div>
-
-                  <div className="space-y-2">
-                    <SliderField
-                      label="Text Size (mm)"
-                      min={8}
-                      max={40}
-                      step={1}
-                      value={params.lidTextSize}
-                      onChange={(value) => updateParam('lidTextSize', value)}
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <SliderField
-                      label="Text Depth (mm)"
-                      min={0.3}
-                      max={2}
-                      step={0.1}
-                      value={params.lidTextDepth}
-                      onChange={(value) => updateParam('lidTextDepth', value)}
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label>Style</Label>
-                    <div className="flex gap-2">
-                      <button
-                        className={`flex-1 px-3 py-1.5 text-sm rounded-md border ${params.lidTextStyle === 'engraved' ? 'bg-primary text-primary-foreground' : 'bg-background'}`}
-                        onClick={() => updateParam('lidTextStyle', 'engraved')}
-                      >
-                        Engraved
-                      </button>
-                      <button
-                        className={`flex-1 px-3 py-1.5 text-sm rounded-md border ${params.lidTextStyle === 'embossed' ? 'bg-primary text-primary-foreground' : 'bg-background'}`}
-                        onClick={() => updateParam('lidTextStyle', 'embossed')}
-                      >
-                        Embossed
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label>Rotation</Label>
-                    <div className="flex gap-2">
-                      {[0, 90, 180, 270].map((deg) => (
-                        <button
-                          key={deg}
-                          className={`flex-1 px-3 py-1.5 text-sm rounded-md border ${params.lidTextRotation === deg ? 'bg-primary text-primary-foreground' : 'bg-background'}`}
-                          onClick={() => updateParam('lidTextRotation', deg)}
-                        >
-                          {deg}°
-                        </button>
-                      ))}
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      Rotates the text on the surface — at 90° or 270° it runs along the depth instead of the width.
-                    </p>
-                  </div>
-                </div>
+                </Group>
               </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'print' && (
+        <div className="space-y-0">
+          <Group title="Printer plate" defaultOpen summary={`${bedX} × ${bedY} mm`}>
+            <select
+              aria-label="Printer preset"
+              className={fieldCls}
+              value={PRINTER_PRESETS.findIndex(p => p.bedX === bedX && p.bedY === bedY)}
+              onChange={(e) => {
+                const preset = PRINTER_PRESETS[Number(e.target.value)]
+                if (preset && preset.bedX > 0) {
+                  onSettingsChange({ ...settings, printerBedX: preset.bedX, printerBedY: preset.bedY })
+                }
+              }}
+            >
+              {PRINTER_PRESETS.map((preset, i) => (
+                <option key={i} value={i}>
+                  {preset.label}{preset.bedX > 0 ? ` · ${preset.bedX} × ${preset.bedY}` : ''}
+                </option>
+              ))}
+            </select>
+            <div className="grid grid-cols-2 gap-3">
+              <label className={`space-y-1.5 ${labelCls}`}>
+                Plate width (mm)
+                <input type="number" value={bedX} className={fieldCls}
+                  onChange={(e) => onSettingsChange({ ...settings, printerBedX: Number(e.target.value) })} />
+              </label>
+              <label className={`space-y-1.5 ${labelCls}`}>
+                Plate depth (mm)
+                <input type="number" value={bedY} className={fieldCls}
+                  onChange={(e) => onSettingsChange({ ...settings, printerBedY: Number(e.target.value) })} />
+              </label>
+            </div>
+            {oversized.length > 0 ? (
+              <div className="flex items-start gap-2 text-xs text-red-400 border border-red-500/40 bg-red-500/10 rounded-md p-3">
+                <AlertTriangle className="h-4 w-4 mt-px shrink-0" />
+                <p>
+                  {oversized.map(f => `${f.name} (${f.w} × ${f.d} mm)`).join(' and ')} won't fit this plate, even rotated.
+                </p>
+              </div>
+            ) : !partsFitTogether ? (
+              <div className="flex items-start gap-2 text-xs text-amber-400 border border-amber-500/40 bg-amber-500/10 rounded-md p-3">
+                <AlertTriangle className="h-4 w-4 mt-px shrink-0" />
+                <p>
+                  {footprints.map(f => f.name).join(' and ')} each fit this plate, but not together. Print them one at a time.
+                </p>
+              </div>
+            ) : (
+              <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                {footprints.length > 1 ? 'The box and lid fit the plate together.' : 'The box fits the plate.'}
+              </p>
             )}
-          </div>
-        )}
+            <SwitchRow
+              label="Auto-arrange parts"
+              checked={settings.autoArrange}
+              onChange={(autoArrange) => onSettingsChange({ ...settings, autoArrange })}
+            />
+            <p className="text-xs text-muted-foreground -mt-2">
+              Lays the box and lid out next to each other on the plate in the preview, turning a part a quarter turn only when that is what makes it fit.
+            </p>
+          </Group>
 
-        {activeTab === 'settings' && (
-          <div className="space-y-4">
-            {/* Printer plate size */}
-            <div className="border rounded-lg overflow-hidden">
-              <button
-                className="w-full p-4 text-left flex justify-between items-center hover:bg-muted/50 transition-colors"
-                onClick={() => setPlateExpanded(!plateExpanded)}
-              >
-                <div>
-                  <h3 className="text-lg font-semibold">Printer Plate Size</h3>
-                  <p className="text-sm text-muted-foreground">Outlined in the preview; warns when a part won't fit</p>
+          <Group title="Material and parts" defaultOpen summary={settings.filament}>
+            <Segmented
+              aria-label="Filament"
+              value={settings.filament}
+              onChange={(filament) => onSettingsChange({ ...settings, filament })}
+              options={FILAMENTS.map(f => ({ value: f.value, label: f.value }))}
+            />
+            <div className="rounded-lg border divide-y">
+              {([
+                { name: 'Box', dims: `${fmt(params.width)}×${fmt(params.depth)}×${fmt(params.height)}`, volume: boxVolume, onExport: onExportBox },
+                ...(params.includeLid
+                  ? [{
+                      name: isSleeveStyle ? 'Sleeve' : 'Lid',
+                      dims: isSleeveStyle ? `${fmt(sleeve.w)}×${fmt(sleeve.d)}×${fmt(sleeve.h)}` : `${fmt(params.width)}×${fmt(params.depth)}`,
+                      volume: lidVolume,
+                      onExport: onExportLid,
+                    }]
+                  : []),
+              ]).map((part) => (
+                <div key={part.name} className="flex items-center gap-3 px-3 py-2 text-sm">
+                  <span className="w-12">{part.name}</span>
+                  <span className="font-mono text-xs text-muted-foreground">{part.dims}</span>
+                  <span className="ml-auto font-mono text-xs text-muted-foreground">
+                    {part.volume > 0 ? `≈ ${formatGrams(part.volume, settings.filament)} g` : ''}
+                  </span>
+                  <button
+                    className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent"
+                    aria-label={`Export ${part.name} STL`}
+                    title={`Export ${part.name} STL`}
+                    onClick={part.onExport}
+                  >
+                    <Download className="h-4 w-4" />
+                  </button>
                 </div>
-                <ChevronDown
-                  className={`h-5 w-5 transition-transform ${
-                    plateExpanded ? 'rotate-180' : ''
-                  }`}
-                />
-              </button>
-
-              {plateExpanded && (
-                <div className="p-4 border-t space-y-4">
-                  <div className="space-y-2">
-                    <Label>Printer Preset</Label>
-                    <select
-                      className="w-full px-3 py-2 text-sm rounded-md border bg-background"
-                      value={PRINTER_PRESETS.findIndex(p => p.bedX === bedX && p.bedY === bedY)}
-                      onChange={(e) => {
-                        const preset = PRINTER_PRESETS[Number(e.target.value)]
-                        if (preset && preset.bedX > 0) {
-                          onSettingsChange({ ...settings, printerBedX: preset.bedX, printerBedY: preset.bedY })
-                        }
-                      }}
-                    >
-                      {PRINTER_PRESETS.map((preset, i) => (
-                        <option key={i} value={i}>
-                          {preset.label}{preset.bedX > 0 ? ` (${preset.bedX} x ${preset.bedY}mm)` : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label>Plate Width (mm)</Label>
-                      <input
-                        type="number"
-                        value={bedX}
-                        onChange={(e) => onSettingsChange({ ...settings, printerBedX: Number(e.target.value) })}
-                        className="w-full px-3 py-2 text-sm rounded-md border bg-background"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Plate Depth (mm)</Label>
-                      <input
-                        type="number"
-                        value={bedY}
-                        onChange={(e) => onSettingsChange({ ...settings, printerBedY: Number(e.target.value) })}
-                        className="w-full px-3 py-2 text-sm rounded-md border bg-background"
-                      />
-                    </div>
-                  </div>
-
-                  <p className="text-xs text-muted-foreground">
-                    The plate is outlined on the ground of the 3D preview — it turns red when something doesn't fit.
-                    {footprints.map(f => ` · ${f.name} ${f.w} × ${f.d} mm`).join('')}
-                  </p>
-
-                  {oversized.length > 0 ? (
-                    <div className="flex items-start gap-2 text-sm text-red-600 dark:text-red-400 border border-red-500/40 bg-red-500/10 rounded-md p-3">
-                      <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
-                      <p>
-                        {oversized.map(f => f.name).join(' and ')} ({oversized.map(f => `${f.w} × ${f.d} mm`).join(', ')}) won't
-                        fit the {bedX} × {bedY} mm plate, even rotated.
-                      </p>
-                    </div>
-                  ) : (
-                    <p className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <CheckCircle2 className="h-4 w-4 text-green-600" />
-                      All parts fit the plate.
-                    </p>
-                  )}
-
-                  <Button variant="outline" className="w-full" onClick={resizeBoxToPlate}>
-                    Resize box to fill plate (80%)
-                  </Button>
-                </div>
-              )}
+              ))}
             </div>
+            <p className="text-xs text-muted-foreground">Weights are for a solid part; real prints use less with infill.</p>
+          </Group>
+        </div>
+      )}
 
-            {/* Projects */}
-            <div className="border rounded-lg overflow-hidden">
-              <button
-                className="w-full p-4 text-left flex justify-between items-center hover:bg-muted/50 transition-colors"
-                onClick={() => setProjectsExpanded(!projectsExpanded)}
-              >
-                <div>
-                  <h3 className="text-lg font-semibold">Projects</h3>
-                  <p className="text-sm text-muted-foreground">Name, save and load your projects</p>
-                </div>
-                <ChevronDown
-                  className={`h-5 w-5 transition-transform ${
-                    projectsExpanded ? 'rotate-180' : ''
-                  }`}
-                />
-              </button>
-
-              {projectsExpanded && (
-                <div className="p-4 border-t space-y-4">
-                  <div className="space-y-2">
-                    <Label>Project Name</Label>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={projectName}
-                        onChange={(e) => onProjectNameChange(e.target.value)}
-                        placeholder="My parts organizer"
-                        className="flex-1 min-w-0 px-3 py-2 text-sm rounded-md border bg-background"
-                      />
-                      <Button
-                        onClick={() => onSaveProject(projectName.trim())}
-                        disabled={!projectName.trim()}
-                      >
-                        <Save className="mr-2 h-4 w-4" />
-                        Save
-                      </Button>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      Saves the current settings under this name and prefixes exported STL filenames. Saving with an existing name overwrites that project.
-                    </p>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label>Saved Projects</Label>
-                    {savedProjects.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">No saved projects yet.</p>
-                    ) : (
-                      <div className="space-y-2">
-                        {savedProjects.map((p) => (
-                          <div key={p.name} className="flex items-center gap-2 border rounded-md p-2">
-                            <div className="flex-1 min-w-0">
-                              <p className="text-sm font-medium truncate">{p.name}</p>
-                              <p className="text-xs text-muted-foreground">
-                                {p.params.width} x {p.params.depth} x {p.params.height} mm
-                                {' · '}{new Date(p.savedAt).toLocaleDateString()}
-                              </p>
-                            </div>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => onLoadProject(p.name)}
-                            >
-                              Load
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              title="Delete project"
-                              onClick={() => onDeleteProject(p.name)}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Share */}
-            <div className="border rounded-lg overflow-hidden">
-              <button
-                className="w-full p-4 text-left flex justify-between items-center hover:bg-muted/50 transition-colors"
-                onClick={() => setShareExpanded(!shareExpanded)}
-              >
-                <div>
-                  <h3 className="text-lg font-semibold">Share &amp; Backup</h3>
-                  <p className="text-sm text-muted-foreground">Move projects between devices — links or JSON files</p>
-                </div>
-                <ChevronDown
-                  className={`h-5 w-5 transition-transform ${
-                    shareExpanded ? 'rotate-180' : ''
-                  }`}
-                />
-              </button>
-
-              {shareExpanded && (
-                <div className="p-4 border-t space-y-4">
-                  <div className="space-y-2">
-                    <p className="text-xs text-muted-foreground">
-                      Copy a link that opens this exact project on any device. The project data lives
-                      in the link itself (after the #) and is never sent to any server.
-                    </p>
-                    <Button className="w-full" variant="outline" onClick={handleCopyShareLink}>
-                      {linkCopied ? <Check className="mr-2 h-4 w-4" /> : <Link2 className="mr-2 h-4 w-4" />}
-                      {linkCopied ? 'Link copied!' : 'Copy Share Link'}
-                    </Button>
-                  </div>
-
-                  <div className="space-y-2">
-                    <p className="text-xs text-muted-foreground">
-                      Export the current settings as a JSON file, or your whole project library as a
-                      single backup file. Import accepts both; a library import merges into your
-                      saved projects (same names are overwritten).
-                    </p>
-                    <div className="flex gap-2">
-                      <Button
-                        className="flex-1"
-                        variant="outline"
-                        onClick={() => onExportJson(projectName.trim() || 'box-project')}
-                      >
-                        <FileDown className="mr-2 h-4 w-4" />
-                        Export JSON
-                      </Button>
-                      <Button
-                        className="flex-1"
-                        variant="outline"
-                        onClick={() => importInputRef.current?.click()}
-                      >
-                        <FileUp className="mr-2 h-4 w-4" />
-                        Import JSON
-                      </Button>
-                      <input
-                        ref={importInputRef}
-                        type="file"
-                        accept=".json,application/json"
-                        className="hidden"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0]
-                          if (file) onImportJson(file)
-                          e.target.value = ''
-                        }}
-                      />
-                    </div>
-                    <Button
-                      className="w-full"
-                      variant="outline"
-                      disabled={savedProjects.length === 0}
-                      onClick={onExportAllJson}
-                    >
-                      <Archive className="mr-2 h-4 w-4" />
-                      Export All Projects ({savedProjects.length})
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Reset */}
-      <div className="flex gap-2 pt-4 border-t">
-        <Button className="flex-1" variant="ghost" onClick={onReset}>
-          <RotateCcw className="mr-2 h-4 w-4" />
-          Reset to Defaults
-        </Button>
-      </div>
+      {startFromOpen && (
+        <StartFromDialog
+          params={params}
+          onParamsChange={onParamsChange}
+          onClose={() => setStartFromOpen(false)}
+        />
+      )}
     </div>
   )
 }

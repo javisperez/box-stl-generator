@@ -7,11 +7,144 @@ with date-based entries since the project has no version releases.
 ## 2026-10-27
 
 ### Changed
+- **Redesigned the app shell: dark theme, top bar, and three sidebar tabs.**
+  The sidebar's Generator / Box / Lid / Settings tabs are now **Box / Lid /
+  Print**. The Volume, Compartment and Division calculators moved into a
+  "Start from…" dialog at the top of the Box tab (they only overwrite the box
+  size once, so they no longer need a tab). Projects, share link and JSON
+  import/export moved into a project dropdown and a `⋯` menu in a new top bar,
+  along with the main Export button. Box and Lid controls sit in collapsible
+  groups that show a one-line summary when closed, long explanations became
+  info tooltips, and the lid checkbox + style buttons + hinge checkbox became a
+  single `None / Lid / Sleeve / Hinged` control. The theme is dark-only with a
+  coral accent; the width, depth and height sliders use per-axis colours. The
+  floating per-part export cards were replaced by a small weight pill, and
+  per-part export now lives on the Print tab, which also gained a PLA / PETG /
+  ABS selector for the weight estimate. The credits line (Javis Perez &
+  Claude, source on GitHub, Apache 2.0 license, and the Ko-fi button) is pinned at
+  the bottom of the sidebar so it is always visible. No generator behaviour
+  changed.
+- **Added a project manager page.** Clicking the project name in the top bar
+  (not the arrow beside it, which still opens the quick menu) swaps the
+  workbench for a grid of project cards. Each card has a small isometric sketch
+  at the box's real proportions, its size, compartment count and closure type,
+  and when it was saved, with Open, Duplicate and Delete actions. The box
+  currently in the editor shows as "In the editor", and a dashed card appears
+  for unsaved work so it can be named and saved or updated from there. The page
+  also has search (by name or size), Recent/Name sorting, New project, Import
+  JSON and Export all. The 3D view stays loaded underneath, so the camera is
+  where you left it when you return.
+- **Added a top-view divider editor.** The Box tab's new Dividers group draws a
+  plan of the box with every divider on it. Drag a divider to move it (or focus
+  it and use the arrow keys, Shift for bigger steps, Delete to remove), add one
+  along the width or depth with the buttons below, and use the spacing button to
+  even them out or clear them all (it asks first when there are more than
+  two). A Visual / Numbers switch lets you type each divider's position in mm
+  from the left or front wall instead, with the resulting clear compartment
+  sizes listed underneath. Each cell shows its clear size in mm, and width and depth
+  dividers use the same amber and green as the size sliders. Dividers can't be
+  dragged past their neighbours. This replaces the two "Dividers along…" count
+  sliders and the per-divider position sliders; the divider thickness slider
+  moved into the same group, and "Walls and dividers" is now just "Walls".
+- **Added an isometric view with dimension rulers.** A Perspective / Isometric
+  switch sits at the top-left of the 3D view (and is remembered). Isometric
+  uses an orthographic camera on the true 45° / 35.3° diagonal, auto-zoomed to
+  fit the box and any lid beside it; dragging pans instead of rotating, so the
+  angle stays put. In that view the box gets width, depth and height rulers
+  with extension lines and labels in the same amber, green and blue as the size
+  sliders. A lid, sleeve or hinged lid lying beside the box gets its own set,
+  measured from the actual part, with the height ruler on the far corner to
+  stay clear of the box's. A lid or hinged lid only shows its height, since its
+  width and depth match the box; a sleeve also shows its own width and depth,
+  which are larger than the box's. Perspective
+  keeps the free-orbit camera and the corner size readout. Both cameras stay
+  loaded and the switch only changes which one is active, so going back to
+  perspective returns to the same angle and zoom you left.
+- **Finger slots in the outer walls are now optional.** Under Finger slots on
+  the Box tab, a new "Notch outer walls" switch (on by default, so existing
+  projects are unchanged) can be turned off to cut the slots in the dividers
+  only and keep the outside of the box solid. The existing divider switch is now
+  just "Notch divider walls"; if both are off, the panel says there is nothing
+  to notch. Cutout patterns no longer keep clear of slot areas on walls that
+  aren't notched. Three new cases (dividers only, dividers only with a pattern,
+  both off) were added to the mesh-integrity sweep, and all 32 cases pass.
+- **Dividers can now be lower than the box top.** With at least one divider on
+  the Box tab, a "Divider height" slider (in mm from the floor) appears under
+  Divider. It sits at full height by default, flush with the rim, and that
+  default tracks the box height; any lower value fixes the dividers at that
+  height. The same height applies to every divider. Where a lowered divider
+  meets a wall, the wall continues up above it, and the box stays a single
+  watertight mesh. A friction lid's lip skips the divider notches when the
+  dividers end below the bottom of the lip, and finger-slot cuts skip dividers
+  that end below the slot floor. A box with full-height dividers is exactly the
+  mesh it was before, which I checked by comparing the old and new generators.
+  Seven cases were added to the mesh-integrity sweep (39 now, all passing).
+- **Replaced "Resize box to fill plate" with auto-arrange.** The Print tab now
+  has an "Auto-arrange parts" switch (on by default) in place of the button that
+  stretched the box to 80% of the plate. With it on, the preview lays the box and
+  its lid or sleeve next to each other, centred on the plate. It tries side by
+  side first, then front to back, and turns a part a quarter turn only when that
+  is what makes the pair fit, preferring the fewest turns. The fit message now
+  covers the parts together: if each fits alone but not both at once it says so
+  in amber ("print them one at a time"), and the red warning stays for a part
+  that is too big on its own. In isometric view the rulers follow a turned part
+  (a ruler is coloured for what it measures, width or depth, not for the axis it
+  runs along). Exported STL files are unchanged. Five new checks cover the
+  arrangement (72 in all).
+- **Added a "Rounded bottom" switch for finger slots.** With finger slots on, the
+  new switch (off by default, so existing projects keep their square notches)
+  turns each notch into a U: the bottom corners are rounded with a radius of up
+  to half the slot width, so a slot whose width is twice its depth ends in a full
+  semicircle, and a shallow slot just gets softened corners. It applies to the
+  outer walls and the dividers alike. The notch is cut as one flat outline pushed
+  through the wall rather than a box plus a cylinder, which keeps the mesh clean.
+  A new check measures the material removed against the exact notch area, and six
+  more mesh cases cover it (67 checks in all).
+- **Added a "Cutouts in the dividers" switch.** When a cutout pattern is set
+  and the box has dividers, this switch (off by default, so nothing changes for
+  existing projects) punches the same pattern through the divider walls too. The
+  holes stay clear of the outer walls, the floor, the divider's top edge (so
+  lowered dividers work), every crossing divider, and any finger-slot notch cut
+  into that divider, so a hole is never sliced open into a partial cut. Dividers
+  too short or too narrow to hold a hole are left solid. Ten cases covering all
+  six pattern shapes, crossing dividers, a chamfer, lowered dividers, finger
+  slots and 0.6 mm dividers were added to the mesh-integrity sweep (56 checks,
+  all passing).
+- **Added a "Cutouts in the floor" switch.** When a cutout pattern is set on
+  the box, this switch (on by default, so nothing changes for existing
+  projects) can be turned off to leave the bottom flat and solid, for better bed
+  adhesion and a clean underside. The walls still get their pattern.
+
 - **Relicensed from MPL 2.0 to Apache 2.0.** Added the standard Apache 2.0
   `LICENSE` and a `NOTICE` file carrying the project's attribution, which
   anyone redistributing the software must preserve. `package.json` now
   declares the license and author. Versions published before this date stay
   available under MPL 2.0.
+
+### Fixed
+- **A leftover hinge setting kept the box's back wall solid.** Switching the
+  closure from Hinged to None, or to a sleeve, turned the lid off but left the
+  hinge flag on in the saved settings, and the box generator only looked at that
+  flag. The back wall then stayed free of finger-slot notches and cutout-pattern
+  holes (a rule meant to protect the hinge knuckle arms) with no hinge anywhere,
+  and the "back wall stays solid" note kept showing. Only a real hinged lid
+  keeps the back wall solid now. Four new checks cover it: a leftover flag with
+  no lid, with a sleeve, for finger slots and for patterns, plus one confirming
+  a real hinged lid still keeps its back wall solid. 60 checks in all.
+- **"Start from" calculators gave compartments that were slightly off the
+  sizes you entered.** The Divisions calculator converted each divider to a
+  percentage of the outer depth, measured to the divider's far edge, but the
+  generator measures across the interior to the divider's centreline, and
+  positions were rounded to whole percents. Asking for 26 · 26 · 26 · 22 mm
+  with 1 mm walls produced 27.3 · 24.8 · 25.8 · 22.2 mm. Positions are now
+  computed from the front wall's inside face to the divider's centre and kept
+  to two decimals, so the compartments come out exact. The Items calculator had
+  the same flaw for three or more columns or rows, and it also assumed dividers
+  as thick as the outer walls; it now uses the real divider thickness, which
+  makes the box slightly smaller when dividers are thinner than the walls.
+  Box and depth totals are no longer rounded to whole millimetres. New checks in
+  `pnpm run check:stl` assert the exact clear sizes (and two new mesh cases cover
+  the solid floor), 45 checks in all.
 
 ## 2026-09-28
 
