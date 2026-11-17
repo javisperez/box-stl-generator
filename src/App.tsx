@@ -5,7 +5,7 @@ import { ProjectsView } from './components/ProjectsView'
 import { arrangeOnPlate } from './utils/plateLayout'
 import { Segmented } from './components/ui/segmented'
 import {
-  generateBox, generateLid, generateSleeve, sleeveOuterDims, jscadToThreeGeometry, BoxParams,
+  generateBox, generateLid, generateBinFeet, generateBaseplate, applyGridfinity, generateSleeve, sleeveOuterDims, sleeveLabelDims, sleeveInPlaceOffset, jscadToThreeGeometry, BoxParams,
   generateBoxHingeKnuckles, generateLidHingeKnuckles,
 } from './utils/boxGenerator'
 import { textToJscadGeometry } from './utils/textGenerator'
@@ -41,12 +41,18 @@ function App() {
 
   const [geometry, setGeometry] = useState<THREE.BufferGeometry | null>(null)
   const [lidGeometry, setLidGeometry] = useState<THREE.BufferGeometry | null>(null)
-  const [hingeBoxGeometry, setHingeBoxGeometry] = useState<THREE.BufferGeometry | null>(null)
   const [hingeLidGeometry, setHingeLidGeometry] = useState<THREE.BufferGeometry | null>(null)
   const [boxJscad, setBoxJscad] = useState<any>(null)
   const [lidJscad, setLidJscad] = useState<any>(null)
   const [hingeBoxJscad, setHingeBoxJscad] = useState<any>(null)
   const [hingeLidJscad, setHingeLidJscad] = useState<any>(null)
+  const [feetJscad, setFeetJscad] = useState<any>(null)
+
+  // Everything attached to the box mesh in the viewer: hinge knuckles and Gridfinity feet
+  const boxExtrasGeometry = useMemo(() => {
+    const polygons = [...(hingeBoxJscad?.polygons ?? []), ...(feetJscad?.polygons ?? [])]
+    return polygons.length ? jscadToThreeGeometry({ polygons }) : null
+  }, [hingeBoxJscad, feetJscad])
 
   // Autosave working state and settings so they survive reloads
   useEffect(() => { saveCurrentParams(params) }, [params])
@@ -57,10 +63,11 @@ function App() {
     try {
       const jscadGeom = generateBox(params)
       setBoxJscad(jscadGeom)
+      setFeetJscad(params.gridfinity ? generateBinFeet(params) : null)
       setGeometry(jscadToThreeGeometry(jscadGeom))
 
       if (params.includeLid && params.lidStyle === 'sleeve') {
-        const s = sleeveOuterDims(params)
+        const s = sleeveLabelDims(params)
         const textGeom = params.lidText.trim()
           ? textToJscadGeometry(params.lidText, s.w, s.d, params.lidTextSize, params.lidTextDepth, params.lidTextRotation)
           : undefined
@@ -69,7 +76,6 @@ function App() {
         setLidGeometry(jscadToThreeGeometry(sleeveJscad))
         setHingeBoxJscad(null)
         setHingeLidJscad(null)
-        setHingeBoxGeometry(null)
         setHingeLidGeometry(null)
       } else if (params.includeLid) {
         const textGeom = params.lidText.trim()
@@ -84,12 +90,10 @@ function App() {
           const hLid = generateLidHingeKnuckles(params)
           setHingeBoxJscad(hBox)
           setHingeLidJscad(hLid)
-          setHingeBoxGeometry(jscadToThreeGeometry(hBox))
           setHingeLidGeometry(jscadToThreeGeometry(hLid))
         } else {
           setHingeBoxJscad(null)
           setHingeLidJscad(null)
-          setHingeBoxGeometry(null)
           setHingeLidGeometry(null)
         }
       } else {
@@ -97,7 +101,6 @@ function App() {
         setLidGeometry(null)
         setHingeBoxJscad(null)
         setHingeLidJscad(null)
-        setHingeBoxGeometry(null)
         setHingeLidGeometry(null)
       }
     } catch (error) {
@@ -112,11 +115,8 @@ function App() {
 
   const handleExport = () => {
     if (!boxJscad) return
-    if (hingeBoxJscad) {
-      exportMultipleJscadToSTL([boxJscad, hingeBoxJscad], stlName('box'))
-    } else {
-      exportJscadToSTL(boxJscad, stlName('box'))
-    }
+    const parts = [boxJscad, hingeBoxJscad, feetJscad].filter(Boolean)
+    exportMultipleJscadToSTL(parts, stlName('box'))
   }
 
   const handleExportLid = () => {
@@ -127,6 +127,13 @@ function App() {
     } else {
       exportJscadToSTL(lidJscad, stlName(part))
     }
+  }
+
+  const handleExportBaseplate = () => {
+    exportJscadToSTL(
+      generateBaseplate(params.baseplateX, params.baseplateY),
+      `${filePrefix ? filePrefix + '_' : ''}gridfinity-baseplate_${params.baseplateX}x${params.baseplateY}.stl`,
+    )
   }
 
   const handleExportAll = () => {
@@ -229,13 +236,10 @@ function App() {
     if (isSleeve) {
       // Box slid fully in: sleeve centered on the box height, shifted back so the
       // box back sits against the sleeve's inner back wall (tolerance gap at rest).
-      lidPosition = [0, (wt + params.sleeveTolerance) / 2, params.height / 2]
-    } else if (params.includeHinge) {
-      // Hinged lid is a flat slab modeled in closed orientation: rest it on the
-      // rim and the knuckle axles line up with the box sockets — no flip.
-      lidPosition = [0, 0, params.height + wt]
+      const off = sleeveInPlaceOffset(params)
+      lidPosition = [off[0], off[1], params.height / 2 + off[2]]
     } else {
-      // Friction lid: flip 180° about Y (the flip the text pre-mirroring assumes),
+      // Friction or hinged lid: flip 180° about Y (the flip the text pre-mirroring assumes),
       // cap resting on the rim, lip hanging into the box.
       lidRotation = [0, Math.PI, 0]
       lidPosition = [0, 0, params.height]
@@ -255,7 +259,7 @@ function App() {
   const lidBeside = params.includeLid && !inPlace
 
   // Material estimates for the export control
-  const boxVolume = useMemo(() => jscadVolumeCm3([boxJscad, hingeBoxJscad]), [boxJscad, hingeBoxJscad])
+  const boxVolume = useMemo(() => jscadVolumeCm3([boxJscad, hingeBoxJscad, feetJscad]), [boxJscad, hingeBoxJscad, feetJscad])
   const lidVolume = useMemo(() => jscadVolumeCm3([lidJscad, hingeLidJscad]), [lidJscad, hingeLidJscad])
   const totalVolume = boxVolume + lidVolume
 
@@ -320,7 +324,7 @@ function App() {
             <BoxViewer
               geometry={geometry}
               lidGeometry={lidGeometry}
-              hingeBoxGeometry={hingeBoxGeometry}
+              hingeBoxGeometry={boxExtrasGeometry}
               hingeLidGeometry={hingeLidGeometry}
               boxWidth={params.width}
               boxDepth={params.depth}
@@ -381,7 +385,7 @@ function App() {
           <div className="flex-1 lg:overflow-y-auto">
             <ControlPanel
               params={params}
-              onParamsChange={setParams}
+              onParamsChange={(next) => setParams(applyGridfinity(next))}
               previewInPlace={previewInPlace}
               onPreviewInPlaceChange={setPreviewInPlace}
               settings={settings}
@@ -389,6 +393,7 @@ function App() {
               boxVolume={boxVolume}
               lidVolume={lidVolume}
               onExportBox={handleExport}
+              onExportBaseplate={handleExportBaseplate}
               onExportLid={handleExportLid}
               partsFitTogether={arrangement.fitsTogether}
             />

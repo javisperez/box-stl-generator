@@ -1,4 +1,4 @@
-import { BoxParams, clampDivisionThickness, LID_PATTERNS } from './boxGenerator'
+import { BoxParams, applyGridfinity, clampDivisionThickness, LID_PATTERNS, SLEEVE_AXES } from './boxGenerator'
 import type { FilamentType } from './filament'
 import type { ViewMode } from './boxLayout'
 
@@ -44,6 +44,14 @@ export const DEFAULTS: BoxParams = {
   lidStyle: 'lid' as const,
   sleeveTolerance: 0.3,
   sleeveCutout: true,
+  sleeveAxis: 'depth' as const,
+  hingeInsertDepth: 0,
+  gridfinity: false,
+  gridX: 2,
+  gridY: 2,
+  gridUnits: 6,
+  baseplateX: 2,
+  baseplateY: 2,
 }
 
 export interface SavedProject {
@@ -105,6 +113,8 @@ export function normalizeParams(raw: unknown): BoxParams {
   if (src.divisionThickness == null) p.divisionThickness = p.wallThickness
   p.divisionThickness = clampDivisionThickness(p.divisionThickness, p.wallThickness)
   if (p.lidStyle !== 'sleeve') p.lidStyle = 'lid'
+  if (!SLEEVE_AXES.includes(p.sleeveAxis)) p.sleeveAxis = 'depth'
+  p.hingeInsertDepth = Math.min(Math.max(Number(p.hingeInsertDepth) || 0, 0), 20)
   if (p.dimensionMode !== 'interior') p.dimensionMode = 'exterior'
   p.interiorTolerance = Math.min(Math.max(Number(p.interiorTolerance) || 0, 0), 20)
   if (![0, 90, 180, 270].includes(p.lidTextRotation)) p.lidTextRotation = 0
@@ -126,7 +136,14 @@ export function normalizeParams(raw: unknown): BoxParams {
   p.dividerHeight = Math.max(0, Number(p.dividerHeight) || 0)
   if (!Array.isArray(p.divisionsX)) p.divisionsX = []
   if (!Array.isArray(p.divisionsZ)) p.divisionsZ = []
-  return p
+  p.gridfinity = p.gridfinity === true
+  const cells = (v: unknown, fallback: number, max: number) => Math.min(Math.max(Math.round(Number(v)) || fallback, 1), max)
+  p.gridX = cells(p.gridX, 2, 10)
+  p.gridY = cells(p.gridY, 2, 10)
+  p.gridUnits = cells(p.gridUnits, 6, 24)
+  p.baseplateX = cells(p.baseplateX, 2, 8)
+  p.baseplateY = cells(p.baseplateY, 2, 8)
+  return applyGridfinity(p)
 }
 
 // ── Current working state (autosaved) ────────────────────────────────────────

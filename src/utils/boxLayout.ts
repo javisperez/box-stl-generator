@@ -1,4 +1,4 @@
-import type { BoxParams } from './boxGenerator'
+import { hingeInsertDepth, type BoxParams } from './boxGenerator'
 
 // Evenly spaced divider positions (in % across the interior)
 export function evenPositions(count: number): number[] {
@@ -6,12 +6,11 @@ export function evenPositions(count: number): number[] {
 }
 
 // Friction-fit cap lids hang their lip down into the box interior, so that
-// depth is lost to contents when the lid is on. Hinged lids are flat slabs
-// and sleeves wrap the outside — neither costs interior height.
+// depth is lost to contents when the lid is on. Hinged lids only cost height
+// when they have an insert rim; sleeves wrap the outside and cost none.
 export function frictionLipDepth(params: BoxParams): number {
-  return params.includeLid && params.lidStyle === 'lid' && !params.includeHinge
-    ? params.lidHeight
-    : 0
+  if (!params.includeLid || params.lidStyle !== 'lid') return 0
+  return params.includeHinge ? hingeInsertDepth(params) : params.lidHeight
 }
 
 export type Closure = 'none' | 'lid' | 'sleeve' | 'hinged'

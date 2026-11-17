@@ -64,6 +64,85 @@ export interface BoxParams {
   lidStyle: 'lid' | 'sleeve' // 'lid' = cap with lip; 'sleeve' = open-front cover the box slides into
   sleeveTolerance: number    // gap between box and sleeve interior for sliding fit
   sleeveCutout: boolean      // finger notches at the sleeve opening to grab the box
+  sleeveAxis: SleeveAxis     // axis the box slides along inside the sleeve (the sleeve is open at one end of it)
+  gridfinity: boolean        // box is a Gridfinity bin: size snaps to the grid and a foot is added
+  gridX: number              // bin footprint in grid cells (42 mm pitch)
+  gridY: number
+  gridUnits: number          // bin height in 7 mm units (includes the foot)
+  baseplateX: number         // baseplate size in cells (separate printable part)
+  baseplateY: number
+  hingeInsertDepth: number   // hinged lid: depth of the rim under the lid that seats inside the box (0 = flat)
+}
+
+// width = X, depth = Y, height = Z. Which end is open doesn't matter: the
+// mirrored sleeve is the same part turned around.
+export type SleeveAxis = 'width' | 'depth' | 'height'
+export const SLEEVE_AXES: SleeveAxis[] = ['width', 'depth', 'height']
+
+// The deepest insert rim that still lets a hinged lid open. The lid swings about
+// an axis behind the back wall, so rim points below that axis move toward the
+// FRONT wall while the lid starts to lift. The rim only has the fit tolerance to
+// spare, so a deep rim on a tight fit would bind. Found by sweeping the rim's
+// front face through the opening arc (the same model as hingeRimBackLimit).
+export function hingeInsertMax(params: BoxParams): number {
+  const { depth, wallThickness: wt, lidTolerance: tol, hingeDiameter } = params
+  const R = hingeDiameter / 2
+  const yAxis = depth / 2 + R + HINGE_WALL_GAP
+  const zs = R + HINGE_DROP - wt                 // slab underside, relative to the axis
+  const yFrontWall = -depth / 2 + wt - yAxis     // front wall inner face, relative to the axis
+  const yRim = yFrontWall + tol                  // rim's outer face
+  const cap = Math.max(0, bodyHeight(params) - wt)
+  for (let ins = Math.min(cap, 30); ins > 0; ins -= 0.25) {
+    let clear = true
+    for (let z = zs - ins; z <= zs + 1e-6 && clear; z += 0.25) {
+      for (let deg = 0.25; deg <= 100; deg += 0.25) {
+        const th = (deg * Math.PI) / 180
+        const yp = yRim * Math.cos(th) + z * Math.sin(th)
+        const zp = -yRim * Math.sin(th) + z * Math.cos(th)
+        if (yp < yFrontWall + 0.1 && zp < zs) { clear = false; break }
+      }
+    }
+    if (clear) return Math.round(ins * 4) / 4
+  }
+  return 0
+}
+
+// Depth of the rim that drops into the box under a hinged lid (0 = plain slab)
+export function hingeInsertDepth(params: BoxParams): number {
+  if (!hasHinge(params)) return 0
+  const d = Number(params.hingeInsertDepth)
+  if (!Number.isFinite(d) || d <= 0) return 0
+  return Math.min(d, bodyHeight(params) - params.wallThickness, hingeInsertMax(params))
+}
+
+// ── Gridfinity ────────────────────────────────────────────────────────────────
+// 42 mm pitch, bins are 0.5 mm smaller than the pitch, 7 mm per height unit.
+// A bin's total height includes its 4.75 mm foot; no stacking lip is modelled.
+export const GF_PITCH = 42
+export const GF_CLEARANCE = 0.5
+export const GF_UNIT = 7
+const GF_FOOT_H = 4.75        // foot profile height
+const GF_COLUMN = 0.3         // straight section between the foot and the body (keeps edges off shared planes)
+export const GF_BASE_H = 4.65 // baseplate height
+
+// Height of the box body proper, above the foot
+export function bodyHeight(params: BoxParams): number {
+  return params.gridfinity ? params.height - GF_FOOT_H - GF_COLUMN : params.height
+}
+
+// The size the bin is locked to while Gridfinity is on
+export function gridfinityDims(params: BoxParams): { width: number; depth: number; height: number } {
+  return {
+    width: params.gridX * GF_PITCH - GF_CLEARANCE,
+    depth: params.gridY * GF_PITCH - GF_CLEARANCE,
+    height: params.gridUnits * GF_UNIT,
+  }
+}
+
+// Overwrite width/depth/height with the grid size (exterior mode) when Gridfinity is on
+export function applyGridfinity(params: BoxParams): BoxParams {
+  if (!params.gridfinity) return params
+  return { ...params, ...gridfinityDims(params), dimensionMode: 'exterior' }
 }
 
 // Divider walls must stay printable and can never exceed the outer wall thickness
@@ -82,26 +161,41 @@ export function hasHinge(params: BoxParams): boolean {
 // Effective divider height above the floor. Anything 0, invalid, or not below
 // the rim means full height — the default, which is flush with the box top.
 export function dividerHeightMm(params: BoxParams): number {
-  const full = params.height - params.wallThickness
+  const full = bodyHeight(params) - params.wallThickness
   const dh = Number(params.dividerHeight)
   if (!Number.isFinite(dh) || dh <= 0 || dh >= full - 0.01) return full
   return Math.max(dh, 1)
 }
 
 export function dividersLowered(params: BoxParams): boolean {
-  return dividerHeightMm(params) < params.height - params.wallThickness
+  return dividerHeightMm(params) < bodyHeight(params) - params.wallThickness
 }
 
 // A friction lid's lip hangs down from the rim. Dividers shorter than the lip
 // bottom never touch it, so the lip needs no notches for them.
 function dividersReachLip(params: BoxParams): boolean {
   if (!dividersLowered(params)) return true
-  const lip = hasHinge(params) ? 0 : Math.min(params.lidHeight, params.height - params.wallThickness)
-  return params.wallThickness + dividerHeightMm(params) > params.height - lip + 0.01
+  const lip = hasHinge(params) ? hingeInsertDepth(params) : Math.min(params.lidHeight, bodyHeight(params) - params.wallThickness)
+  return params.wallThickness + dividerHeightMm(params) > bodyHeight(params) - lip + 0.01
+}
+
+// Shift a box geometry (plain polygons or CSG geom3) along Z
+function shiftZ(g: any, dz: number): any {
+  if (g && g.transforms) return translate([0, 0, dz], g)
+  return { polygons: g.polygons.map((poly: any) => ({ vertices: poly.vertices.map(([x, y, z]: number[]) => [x, y, z + dz]) })) }
+}
+
+export function generateBox(params: BoxParams) {
+  if (!params.gridfinity) return generateBoxBody(params)
+  // Total height includes the foot: the body is the same box, just shorter and
+  // lifted so the whole bin stays centred on the origin.
+  const bh = bodyHeight(params)
+  const body = generateBoxBody({ ...params, height: bh, gridfinity: false })
+  return shiftZ(body, (params.height - bh) / 2)
 }
 
 // Direct geometry construction — no CSG, guaranteed manifold
-export function generateBox(params: BoxParams) {
+function generateBoxBody(params: BoxParams) {
   const { width, depth, height, wallThickness, divisionsX, divisionsZ, divisionThickness, chamferSize } = params
   const w2 = width / 2, d2 = depth / 2, h2 = height / 2
   const wt = wallThickness
@@ -859,7 +953,7 @@ function lidPatternHoles(params: BoxParams, textGeometry?: any): any | null {
   const d2 = depth / 2
 
   let region: Rect2
-  if (includeHinge) {
+  if (includeHinge && hingeInsertDepth(params) <= 0) {
     // Flat slab: keep a solid border all around
     const inset = wt + 2
     region = { x0: -w2 + inset, x1: w2 - inset, y0: -d2 + inset, y1: d2 - inset }
@@ -873,10 +967,40 @@ function lidPatternHoles(params: BoxParams, textGeometry?: any): any | null {
 
   const exclusions: Rect2[] = []
   if (textGeometry) {
-    // Friction lid text is mirrored in X (it reads through the flip)
-    exclusions.push(boundsRect(textGeometry, 1.5, !includeHinge))
+    // Lid text is mirrored in X (it reads through the flip)
+    exclusions.push(boundsRect(textGeometry, 1.5, true))
   }
   return patternPrisms(params, region, -wt - 0.5, 0.5, exclusions)
+}
+
+// The insert rim hangs inside the box right against the back wall, while the lid
+// swings about an axis BEHIND that wall. Rim points above the axis height move
+// toward the wall as the lid opens, so the back of the rim would wedge into it.
+// This finds how far forward (abs Y) the side rims must stop — and the back rim
+// is dropped entirely — so the whole rim clears the wall for any wall thickness.
+export function hingeRimBackLimit(params: BoxParams): number {
+  const { depth, wallThickness: wt, lidTolerance: tol, hingeDiameter } = params
+  const ins = hingeInsertDepth(params)
+  const R = hingeDiameter / 2
+  const d2 = depth / 2
+  const yAxis = d2 + R + HINGE_WALL_GAP
+  const zs = R + HINGE_DROP - wt            // slab underside, relative to the axis
+  const yWall = -(R + HINGE_WALL_GAP + wt)  // back wall inner face, relative to the axis
+  const nominal = (d2 - wt - tol) - yAxis   // rim's back face, relative to the axis
+  const floorLimit = -d2 + 2 * wt + tol + 1 // never eat into the front rim
+  for (let ye = nominal; yAxis + ye > floorLimit; ye -= 0.25) {
+    let clear = true
+    for (let z = zs - ins; z <= zs + 1e-6 && clear; z += 0.25) {
+      for (let deg = 0.5; deg <= 100; deg += 0.5) {
+        const th = (deg * Math.PI) / 180
+        const yp = ye * Math.cos(th) + z * Math.sin(th)
+        const zp = -ye * Math.sin(th) + z * Math.cos(th)
+        if (yp > yWall - 0.2 && zp < zs) { clear = false; break }
+      }
+    }
+    if (clear) return yAxis + ye
+  }
+  return floorLimit
 }
 
 export function generateLid(params: BoxParams, textGeometry?: any) {
@@ -893,14 +1017,18 @@ export function generateLid(params: BoxParams, textGeometry?: any) {
 // Uses a heightmap grid: cap cells have top=0, lip wall cells have top=lidHeight.
 // Vertical step faces are generated automatically where heights differ.
 //
-// Hinged lids have NO lip (lh = 0 → plain slab): a lip can't coexist with a
-// hinge, because a lid whose barrel aligns with the box knuckles when closed
-// would need lip and barrel on opposite faces — unprintable flat. The hinged
-// lid is instead modeled directly in its closed orientation (z=0 face up),
-// which is also exactly what the knuckle placement assumes.
+// Hinged lids use the same print frame as friction lids: outer face on the bed
+// (z = -wt), rim pointing up (the optional insert depth), flipped about Y when
+// closed. The hinge sits at or below the outer face plane, so the whole lid —
+// slab, rim and knuckles — prints face-down with no supports.
 function generateFlatLid(params: BoxParams) {
-  const { width, depth, height, wallThickness: wt, lidHeight: lhRaw, lidTolerance: tol, divisionsX, divisionsZ, divisionThickness, chamferSize, includeHinge } = params
-  const lh = includeHinge ? 0 : Math.min(lhRaw, height - wt)  // lip can't exceed inner box height
+  const { width, depth, wallThickness: wt, lidHeight: lhRaw, lidTolerance: tol, divisionsX, divisionsZ, divisionThickness, chamferSize, includeHinge } = params
+  // Hinged lids: lip depth comes from the insert setting (0 = plain slab). The
+  // heightmap is built lip-up like a friction lid, then mirrored in Z at the end
+  // so the rim hangs BELOW the slab (z < -wt) into the box when closed.
+  const lh = includeHinge ? hingeInsertDepth({ ...params, includeLid: true, lidStyle: 'lid' }) : Math.min(lhRaw, bodyHeight(params) - wt)  // lip can't exceed inner box height
+  // Hinged rim: nothing beyond this Y (the back rim is dropped, side rims stop short)
+  const rimYMax = includeHinge && lh > 0 ? hingeRimBackLimit({ ...params, includeLid: true, lidStyle: 'lid' }) : Infinity
   const dt = clampDivisionThickness(divisionThickness, wt)
 
   const w2 = width / 2, d2 = depth / 2
@@ -938,6 +1066,7 @@ function generateFlatLid(params: BoxParams) {
   if (c > 0) { ySet.add(-d2 + c); ySet.add(d2 - c) }
   if (lid2 > 0.01) { ySet.add(-lid2); ySet.add(lid2) }
   for (const yn of yNotches) { ySet.add(yn - sw / 2); ySet.add(yn + sw / 2) }
+  if (rimYMax < lod2 - 0.001 && rimYMax > -lod2) ySet.add(rimYMax)
   const yB = [...ySet].sort((a, b) => a - b)
 
   type V = [number, number, number]
@@ -953,6 +1082,9 @@ function generateFlatLid(params: BoxParams) {
     // Inside lip inner → cavity
     if (liw2 > 0.01 && lid2 > 0.01 &&
         Math.abs(mx) < liw2 - 0.001 && Math.abs(my) < lid2 - 0.001) return 0
+
+    // Hinged rim stops short of the back wall
+    if (my > rimYMax) return 0
 
     // Lip wall region — check notches
     for (const xn of xNotches) {
@@ -1154,39 +1286,22 @@ function generateFlatLid(params: BoxParams) {
 
 // CSG-based lid — only used when text is present (text requires subtract/union)
 function generateLidCSG(params: BoxParams, textGeometry: any) {
-  const { width, depth, height, wallThickness, lidHeight: lidHeightRaw, lidTolerance, divisionsX, divisionsZ, divisionThickness, lidTextStyle, chamferSize, includeHinge } = params
-  const lidHeight = Math.min(lidHeightRaw, height - wallThickness)  // lip can't exceed inner box height
+  const { width, depth, wallThickness, lidHeight: lidHeightRaw, lidTolerance, divisionsX, divisionsZ, divisionThickness, lidTextStyle, chamferSize, includeHinge } = params
+  const lidHeight = Math.min(lidHeightRaw, bodyHeight(params) - wallThickness)  // lip can't exceed inner box height
   const divThickness = clampDivisionThickness(divisionThickness, wallThickness)
 
-  // Hinged lids are flat slabs modeled in closed orientation (see generateFlatLid).
-  // Text goes on the TOP face, unmirrored — it's read in place, not through the cap.
+  // Hinged lids share the friction lid's print frame (see generateFlatLid): the
+  // boolean-free slab/rim is built first, then the text goes on its bed face,
+  // pre-mirrored because the lid is flipped about Y when it closes.
   if (includeHinge) {
-    let slab: any = cuboid({ size: [width, depth, wallThickness] })
-
-    const c = Math.min(chamferSize, wallThickness, width / 4, depth / 4)
-    if (c > 0) {
-      const w2 = width / 2, d2 = depth / 2
-      const cornerTris: [number, number][][] = [
-        [[-w2, -d2], [-w2 + c, -d2], [-w2, -d2 + c]],  // front-left
-        [[ w2, -d2], [ w2, -d2 + c], [ w2 - c, -d2]],  // front-right
-        [[ w2,  d2], [ w2 - c,  d2], [ w2,  d2 - c]],  // back-right
-        [[-w2,  d2], [-w2,  d2 - c], [-w2 + c,  d2]],  // back-left
-      ]
-      for (const points of cornerTris) {
-        const prism = extrudeLinear({ height: wallThickness + 2 }, polygon({ points }))
-        slab = subtract(slab, translate([0, 0, -(wallThickness + 2) / 2], prism))
-      }
-    }
-
-    const capTop = wallThickness / 2
+    let body: any = asGeom3(generateFlatLid(params))
+    const mirroredText = mirrorX(textGeometry)
     if (lidTextStyle === 'engraved') {
-      slab = subtract(slab, translate([0, 0, capTop - params.lidTextDepth], textGeometry))
+      body = subtract(body, translate([0, 0, -wallThickness], mirroredText))
     } else {
-      slab = union(slab, translate([0, 0, capTop], textGeometry))
+      body = union(body, translate([0, 0, -wallThickness - params.lidTextDepth], mirroredText))
     }
-
-    // Standard lid frame: bottom at -wallThickness, top at 0
-    return translate([0, 0, -capTop], slab)
+    return body
   }
 
   const lipOuterWidth = width - wallThickness * 2 - lidTolerance * 2
@@ -1269,14 +1384,54 @@ function generateLidCSG(params: BoxParams, textGeometry: any) {
 // Optional finger cutout: semicircular notches through the top and bottom walls
 // at the opening, so the box can be pinched and pulled out even when heavy.
 
-// Outer dimensions of the sleeve — shared by the generator, viewer and UI summary
-export function sleeveOuterDims(params: BoxParams): { w: number; d: number; h: number } {
+// Height of the bin the top-sliding cover cannot reach: the baseplate it sits in
+export function sleeveSeatHeight(params: BoxParams): number {
+  return params.gridfinity && params.sleeveAxis === 'height' ? GF_BASE_H : 0
+}
+
+// The sleeve is always built in a canonical frame (open at -Y, closed back at
+// +Y, label face +Z) and then rotated so its opening faces the chosen side.
+// canon* helpers give the box's size along the canonical axes and the sleeve's
+// canonical outer size; the public sleeveOuterDims is the same in world axes.
+function sleeveCanon(params: BoxParams): { w: number; d: number; h: number } {
   const { width, depth, height, wallThickness: wt, sleeveTolerance: tol } = params
-  return {
-    w: width + 2 * tol + 2 * wt,
-    d: depth + tol + wt,
-    h: height + 2 * tol + 2 * wt,
+  const o = params.sleeveAxis
+  // Gridfinity bin sliding under a cover from the top: the foot sits in the baseplate,
+  // so the cover can only reach the plate's top face and skips that much height.
+  const [bw, bd, bh] = o === 'height' ? [width, height - sleeveSeatHeight(params), depth]
+    : o === 'width' ? [depth, width, height]
+    : [width, depth, height]
+  return { w: bw + 2 * tol + 2 * wt, d: bd + tol + wt, h: bh + 2 * tol + 2 * wt }
+}
+
+// Canonical → world rotation for each opening. [x, y, z] → world [x, y, z]
+export function sleeveToWorld(axis: SleeveAxis, [x, y, z]: number[]): [number, number, number] {
+  switch (axis) {
+    case 'width': return [y, -x, z]    // canonical -Y → world -X
+    case 'height': return [x, -z, y]   // canonical -Y (open) → world -Z, closed back → world +Z (top)
+    default: return [x, y, z]
   }
+}
+
+// Outer dimensions of the sleeve in world axes — shared by the generator, viewer and UI summary
+export function sleeveOuterDims(params: BoxParams): { w: number; d: number; h: number } {
+  const c = sleeveCanon(params)
+  const o = params.sleeveAxis
+  if (o === 'height') return { w: c.w, d: c.h, h: c.d }
+  if (o === 'width') return { w: c.d, d: c.w, h: c.h }
+  return c
+}
+
+// Size of the top face, where the label text is read
+export function sleeveLabelDims(params: BoxParams): { w: number; d: number } {
+  const s = sleeveOuterDims(params)
+  return { w: s.w, d: s.d }
+}
+
+// Where the sleeve's centre sits relative to the box centre with the box slid
+// fully in (box against the closed end, tolerance gap at rest)
+export function sleeveInPlaceOffset(params: BoxParams): [number, number, number] {
+  return sleeveToWorld(params.sleeveAxis, [0, (params.wallThickness + params.sleeveTolerance + sleeveSeatHeight(params)) / 2, 0])
 }
 
 /**
@@ -1288,11 +1443,11 @@ export function sleeveOuterDims(params: BoxParams): { w: number; d: number; h: n
  * keep holes clear of the top/bottom plates (already perforated separately),
  * the front opening, and the back/side corners.
  */
-function sleeveWallHoles(params: BoxParams): any | null {
+function sleeveWallHoles(params: BoxParams, backExclusions: Rect2[] = []): any | null {
   const { wallThickness: wt, lidPattern, lidPatternSize, lidPatternSpacing } = params
   if (lidPattern === 'none') return null
 
-  const { w: outerW, d: outerD, h: outerH } = sleeveOuterDims(params)
+  const { w: outerW, d: outerD, h: outerH } = sleeveCanon(params)
   const w2 = outerW / 2, d2 = outerD / 2, h2 = outerH / 2
   const innerW = outerW - 2 * wt
 
@@ -1330,7 +1485,7 @@ function sleeveWallHoles(params: BoxParams): any | null {
 
   // Back wall: u = X, v = Z, extrusion punches through Y
   const backRegion: Rect2 = { x0: -(innerW / 2 - 1.5), x1: innerW / 2 - 1.5, y0: zBot, y1: zTop }
-  const backPositions = patternGrid(lidPattern, size, spacing, backRegion, [])
+  const backPositions = patternGrid(lidPattern, size, spacing, backRegion, backExclusions)
   if (backPositions) {
     // rotate -90° about X: (x,y,z) -> (x, z, -y)
     const bPrism = rotate([-Math.PI / 2, 0, 0], prism)
@@ -1343,12 +1498,33 @@ function sleeveWallHoles(params: BoxParams): any | null {
   return unionAll(solids)
 }
 
-export function generateSleeve(params: BoxParams, textGeometry?: any): any {
-  const { width, depth, wallThickness: wt, sleeveTolerance: tol, sleeveCutout, lidTextStyle, lidTextDepth } = params
-  const { w: outerW, d: outerD, h: outerH } = sleeveOuterDims(params)
+export function generateSleeve(params: BoxParams, rawText?: any): any {
+  const { wallThickness: wt, sleeveTolerance: tol, sleeveCutout, lidTextStyle, lidTextDepth } = params
+  const axis: SleeveAxis = SLEEVE_AXES.includes(params.sleeveAxis) ? params.sleeveAxis : 'depth'
+  params = { ...params, sleeveAxis: axis }
+  const { w: outerW, d: outerD, h: outerH } = sleeveCanon(params)
   const innerW = outerW - 2 * wt
   const innerH = outerH - 2 * wt
-  const cavityD = depth + tol // from front opening to inside of back wall
+  const width = innerW - 2 * tol // box size along the canonical X axis
+  const cavityD = outerD - wt     // from front opening to inside of back wall
+
+  // The label is authored reading correctly in the world; counter-rotate it so
+  // the final rotation of the whole sleeve puts it back upright.
+  // Height axis: the closed end is the world top, i.e. the canonical back wall,
+  // so the text is laid onto that wall instead of the canonical top plate.
+  let textGeometry = rawText
+  let textOnBack = false
+  let backTextRect: Rect2[] = []
+  if (rawText) {
+    if (axis === 'height') {
+      textOnBack = true
+      const r = boundsRect(rawText, 1.5, false)
+      backTextRect = [{ x0: r.x0, x1: r.x1, y0: -r.y1, y1: -r.y0 }] // world Y → canonical -Z
+      textGeometry = rotate([-Math.PI / 2, 0, 0], rawText)         // text z → canonical +Y
+    } else if (axis === 'width') {
+      textGeometry = rotate([0, 0, Math.PI / 2], rawText)
+    }
+  }
 
   let sleeve: any = cuboid({ size: [outerW, outerD, outerH] })
 
@@ -1365,7 +1541,14 @@ export function generateSleeve(params: BoxParams, textGeometry?: any): any {
   }
 
   // Text on the top face, read in place — no mirroring needed
-  if (textGeometry) {
+  if (textGeometry && textOnBack) {
+    const back = outerD / 2
+    if (lidTextStyle === 'engraved') {
+      sleeve = subtract(sleeve, translate([0, back - lidTextDepth, 0], textGeometry))
+    } else {
+      sleeve = union(sleeve, translate([0, back, 0], textGeometry))
+    }
+  } else if (textGeometry) {
     const top = outerH / 2
     if (lidTextStyle === 'engraved') {
       sleeve = subtract(sleeve, translate([0, 0, top - lidTextDepth], textGeometry))
@@ -1384,7 +1567,7 @@ export function generateSleeve(params: BoxParams, textGeometry?: any): any {
       const notchR = Math.min(width * 0.3, 10)
       exclusions.push({ x0: -notchR - 1.5, x1: notchR + 1.5, y0: -outerD / 2 - 1, y1: -outerD / 2 + notchR + 1.5 })
     }
-    if (textGeometry) {
+    if (textGeometry && !textOnBack) {
       exclusions.push(boundsRect(textGeometry, 1.5, false))
     }
     const region: Rect2 = {
@@ -1394,12 +1577,105 @@ export function generateSleeve(params: BoxParams, textGeometry?: any): any {
       y1: outerD / 2 - wt - 1.5,
     }
     const plateHoles = patternPrisms(params, region, -outerH / 2 - 0.5, outerH / 2 + 0.5, exclusions)
-    const wallHoles = sleeveWallHoles(params)
+    const wallHoles = sleeveWallHoles(params, backTextRect)
     const holes = plateHoles && wallHoles ? union(plateHoles, wallHoles) : plateHoles || wallHoles
     if (holes) sleeve = subtract(sleeve, holes)
   }
 
-  return sleeve
+  return orientSleeve(sleeve, axis)
+}
+
+// Rotate the canonical sleeve so it opens along the requested axis
+function orientSleeve(sleeve: any, axis: SleeveAxis): any {
+  switch (axis) {
+    case 'width': return rotate([0, 0, -Math.PI / 2], sleeve)
+    case 'height': return rotate([Math.PI / 2, 0, 0], sleeve)
+    default: return sleeve
+  }
+}
+
+// ── Gridfinity feet and baseplate ─────────────────────────────────────────────
+type GfLevel = { w: number; z: number; r: number }
+
+// Rounded-square ring (CCW from +Z), `segs` points per corner arc
+function roundedSquareRing(w: number, r: number, segs = 6): [number, number][] {
+  const half = w / 2
+  const c = half - r
+  const pts: [number, number][] = []
+  const corners: [number, number, number][] = [[c, -c, -90], [c, c, 0], [-c, c, 90], [-c, -c, 180]]
+  for (const [cx, cy, a0] of corners) {
+    for (let i = 0; i <= segs; i++) {
+      const a = ((a0 + (i / segs) * 90) * Math.PI) / 180
+      pts.push([cx + r * Math.cos(a), cy + r * Math.sin(a)])
+    }
+  }
+  return pts
+}
+
+// Closed manifold solid lofted through rounded-square rings (plain polygons,
+// outward-facing). Side quads are split into triangles since consecutive rings
+// of different radii are not planar.
+function loftRounded(levels: GfLevel[], cx: number, cy: number, z0: number): { vertices: number[][] }[] {
+  const rings = levels.map(l => roundedSquareRing(l.w, l.r).map(([x, y]) => [x + cx, y + cy, z0 + l.z]))
+  const n = rings[0].length
+  const polys: { vertices: number[][] }[] = []
+  polys.push({ vertices: [...rings[0]].reverse() })                    // bottom, faces down
+  polys.push({ vertices: [...rings[rings.length - 1]] })               // top, faces up
+  for (let k = 0; k < rings.length - 1; k++) {
+    const a = rings[k], b = rings[k + 1]
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n
+      polys.push({ vertices: [a[i], a[j], b[j]] })
+      polys.push({ vertices: [a[i], b[j], b[i]] })
+    }
+  }
+  return polys
+}
+
+// Foot profile (bottom up): 0.8 chamfer, 1.8 vertical, 2.15 chamfer, then a short
+// straight section that sinks into the floor. Corner radius shrinks with the inset.
+function gfFootLevels(sink: number): GfLevel[] {
+  const rad = (w: number) => Math.max(3.75 - (41.5 - w) / 2, 0.8)
+  return ([[35.6, 0], [37.2, 0.8], [37.2, 2.6], [41.5, GF_FOOT_H], [41.5, GF_FOOT_H + GF_COLUMN + sink]] as [number, number][])
+    .map(([w, z]) => ({ w, z, r: rad(w) }))
+}
+
+/** Gridfinity feet for the bin: one per grid cell, as separate overlapping closed shells. */
+export function generateBinFeet(params: BoxParams): any {
+  const sink = Math.min(0.4, params.wallThickness / 2)
+  const levels = gfFootLevels(sink)
+  const z0 = -params.height / 2
+  const polygons: any[] = []
+  for (let i = 0; i < params.gridX; i++) {
+    for (let j = 0; j < params.gridY; j++) {
+      const cx = (i - (params.gridX - 1) / 2) * GF_PITCH
+      const cy = (j - (params.gridY - 1) / 2) * GF_PITCH
+      polygons.push(...loftRounded(levels, cx, cy, z0))
+    }
+  }
+  return { polygons }
+}
+
+/**
+ * Plain Gridfinity baseplate (no magnets or screws): a framework of sockets that
+ * the bin feet click into, open at the bottom. Block minus one lofted cavity per
+ * cell; the rim between cells is 0.2 mm wide at the top.
+ */
+export function generateBaseplate(cellsX: number, cellsY: number): any {
+  const nx = Math.max(1, Math.round(cellsX)), ny = Math.max(1, Math.round(cellsY))
+  const block = translate([0, 0, GF_BASE_H / 2], cuboid({ size: [nx * GF_PITCH, ny * GF_PITCH, GF_BASE_H] }))
+  const rad = (w: number) => Math.max(3.9 - (41.8 - w) / 2, 1)
+  const levels: GfLevel[] = ([[36.3, -0.5], [36.3, 0], [37.7, 0.7], [37.7, 2.5], [41.8, 4.55], [41.8, GF_BASE_H + 0.5]] as [number, number][])
+    .map(([w, z]) => ({ w, z, r: rad(w) }))
+  const cavities: any[] = []
+  for (let i = 0; i < nx; i++) {
+    for (let j = 0; j < ny; j++) {
+      const cx = (i - (nx - 1) / 2) * GF_PITCH
+      const cy = (j - (ny - 1) / 2) * GF_PITCH
+      cavities.push(geom3.create(loftRounded(levels, cx, cy, 0) as any))
+    }
+  }
+  return subtract(block, ...cavities)
 }
 
 // ── Hinge generation (pin-less snap hinge) ────────────────────────────────────
@@ -1414,22 +1690,20 @@ export function generateSleeve(params: BoxParams, textGeometry?: any): any {
 // Assembly: press the lid's stubs straight down into the box clips until they
 // click into the bores. Pull the lid straight up (open flat) to remove.
 //
+// The barrel sits BEHIND the back wall with its top level with the lid's top
+// face (axis one barrel-radius below it), so nothing on the lid rises above the
+// outer face: the lid prints face-down, rim up, with no supports. The lid
+// knuckle is built in the lid's print frame (outer face at z = -wt, flipped
+// about Y when closed, so its X positions are mirrored).
+//
 // IMPORTANT — no boolean ops in here. JSCAD's union/subtract leave sliver
 // polygons and unpaired edges on the split faces that survive even T-junction
 // repair, and slicers report them as open edges. Every piece (clip, barrel,
-// arm) is built as its own closed manifold — extrusion or revolve — and the
-// pieces are concatenated as separate overlapping shells, which slicers merge.
+// plate, arm) is built as its own closed manifold — extrusion or revolve — and
+// the pieces are concatenated as separate overlapping shells, which slicers merge.
 //
-// The hinged lid is a flat slab modeled in closed orientation (see
-// generateFlatLid), so the lid knuckle below is also placed in the closed
-// pose: arm spans the slab thickness Z ∈ [-wt, 0], barrel behind the back edge.
-//
-// LOCAL ORIGIN of every knuckle = hinge axis centre.
-// Translation targets:
-//   box knuckle  → (xC ± (K+GAP), d2+R, h2+wt+R)   barrel centre Z = h2+wt+R/2
-//   lid knuckle  → (xC, d2+R, R)                    barrel centre Z = R/2
-// When the lid is closed (slab bottom on the rim): lid-local Z=R →
-// box Z = h2+wt+R  ✓  (axes coincide)
+// LOCAL ORIGIN of every knuckle = barrel centre + R/2 (up), as before.
+// Closed-pose axis height (box coords) = h2 + wt - R - HINGE_DROP, Y = d2 + R + HINGE_WALL_GAP.
 
 const HINGE_GAP  = 0.2      // side clearance between adjacent knuckles (mm)
 const HINGE_SEGS = 32       // cylinder facets
@@ -1437,6 +1711,9 @@ const AXLE_CLEARANCE = 0.25 // radial clearance between axle stub and bore (mm)
 const AXLE_ENGAGE = 1.4     // stub length: bridges HINGE_GAP, then seats in the bore
 const AXLE_TAPER = 0.4      // stub tip is this much smaller in radius (lead-in)
 const SNAP_PINCH = 0.6      // channel mouth narrower than the axle Ø by this much (mm)
+const HINGE_WALL_GAP = 0.3  // clearance between the barrels and the box's back wall (mm)
+const HINGE_DROP = 0.2      // barrel top sits this far below the lid's outer face plane, so the
+                            // barrel never touches the bed plane edge-on
 
 /**
  * X positions for hinges (centred in the box width).
@@ -1460,19 +1737,7 @@ function mergeSolids(geoms: any[]): any {
   return { polygons: geoms.flatMap((g) => geom3.toPolygons(g)) }
 }
 
-/**
- * Knuckle mounting arm: cuboid below/behind the barrel, overlapping it.
- * Y ∈ [-(R+inset), -inset], Z ∈ [-(R+armH), -R] in knuckle-local coords
- * (origin = axis). The inset pulls the arm off the barrel's bottom axial
- * edge — at y=0 the arm's corner would lie exactly on the revolve's 270°
- * vertex line, fusing two shells along one edge (a 4-face non-manifold edge
- * slicers reject) — and sinks it into the slab/wall it mounts on, so every
- * contact is a volume overlap instead of a zero-thickness touch.
- */
-const HINGE_ARM_INSET = 0.3
-function knuckleArm(K: number, R: number, armH: number): any {
-  return translate([0, -R / 2 - HINGE_ARM_INSET, -(R + armH / 2)], cuboid({ size: [K, R, armH] }))
-}
+const HINGE_ARM_INSET = 0.3 // arms/plates sink this far into the wall/slab so contacts are volume overlaps, not touches
 
 /**
  * Box-side knuckle barrel: a C-clip — through bore with a slot to the top,
@@ -1525,26 +1790,53 @@ export function generateBoxHingeKnuckles(params: BoxParams): any {
   const R = hingeDiameter / 2
   const axleR = hingePinDiameter / 2
   const K = hingeDiameter
-  const dz = -R / 2 // barrel centre below local origin, same convention as before
+  const dz = -R / 2 // barrel centre below local origin
+  // Barrel centre sits R + HINGE_DROP below the lid's outer face (h2 + wt)
+  const zOrigin = h2 + wt - R - HINGE_DROP + R / 2
+  // Arm runs down the outer back wall but never past the floor
+  const barrelBottomBelowRim = 2 * R + HINGE_DROP - wt
+  const armH = Math.max(1, Math.min(wt + 10, height - barrelBottomBelowRim))
 
   const clip = translate([0, 0, dz], cClipBarrel(K, R, axleR))
-  const arm = knuckleArm(K, R, wt + 10)
-
+  // With a thick lid the axis sits well above the rim. The part of the arm
+  // below the rim is sunk into the wall as usual; the part above it is a plain
+  // column kept off the lid's back edge, or the lid slab would hit it.
+  const topArm = zOrigin - R // arm top, level with the underside of the barrel's centre line
+  const rimZ = h2
   const solids: any[] = []
+  const buildArm = (): any[] => {
+    const parts: any[] = []
+    const lowerTop = Math.min(topArm, rimZ)
+    const lowerH = Math.max(lowerTop - (topArm - armH), 3)
+    parts.push(translate([0, -(R + HINGE_WALL_GAP) / 2 - HINGE_ARM_INSET, lowerTop - lowerH / 2 - zOrigin],
+      cuboid({ size: [K, R + HINGE_WALL_GAP, lowerH] })))
+    if (topArm > rimZ + 0.01) {
+      // column from just below the rim up into the barrel, front face 0.3 mm off the wall plane
+      const colTop = topArm, colBot = rimZ - 0.3
+      const yFront = HINGE_WALL_GAP - (R + HINGE_WALL_GAP) // wall plane + gap, relative to the axis
+      const yBack = -HINGE_ARM_INSET
+      parts.push(translate([0, (yFront + yBack) / 2, (colTop + colBot) / 2 - zOrigin],
+        cuboid({ size: [K, yBack - yFront, colTop - colBot] })))
+    }
+    return parts
+  }
+  const armParts = buildArm()
+
   for (const xC of hingeXPositions(hingeCount, width)) {
     for (const x of [xC - K - HINGE_GAP, xC + K + HINGE_GAP]) {
-      solids.push(translate([x, d2 + R, h2 + wt + R], clip))
-      solids.push(translate([x, d2 + R, h2 + wt + R], arm))
+      solids.push(translate([x, d2 + R + HINGE_WALL_GAP, zOrigin], clip))
+      for (const part of armParts) solids.push(translate([x, d2 + R + HINGE_WALL_GAP, zOrigin], part))
     }
   }
   return mergeSolids(solids)
 }
 
 /**
- * All lid-side hinge knuckles: one middle knuckle per hinge position — barrel
- * plus both tapered snap-axle stubs as a single solid of revolution, and an
- * arm spanning the flat lid's thickness (Z ∈ [-wt, 0]). Separate closed
- * shells, no booleans. When closed: lid-local Z=R → box Z=h2+wt+R ✓.
+ * All lid-side hinge knuckles, in the lid's print frame (outer face at
+ * z = -wt, flipped about Y when closed): one middle knuckle per hinge position —
+ * barrel plus both tapered snap-axle stubs as a single solid of revolution,
+ * sitting on a plate that continues the lid slab out behind the back edge so
+ * the barrel prints on solid material. Separate closed shells, no booleans.
  */
 export function generateLidHingeKnuckles(params: BoxParams): any {
   const { width, depth, wallThickness: wt, hingeCount, hingeDiameter, hingePinDiameter } = params
@@ -1566,12 +1858,25 @@ export function generateLidHingeKnuckles(params: BoxParams): any {
   })
   const barrelWithStubs = translate([0, 0, dz],
     rotate([0, Math.PI / 2, 0], extrudeRotate({ segments: HINGE_SEGS }, profile)))
-  const arm = knuckleArm(K, R, wt)
+
+  // Barrel bottom is HINGE_DROP above the bed face (z = -wt); its centre is R above that
+  const zOrigin = -wt + HINGE_DROP + R + R / 2
+  const yAxis = d2 + R + HINGE_WALL_GAP
+  // Plate: continues the slab from just inside the lid's back edge to the far side
+  // of the barrel. Capped at the height of the barrel's centre line: a thick lid
+  // would otherwise leave a deep block swinging down behind the back wall.
+  const y0 = d2 - HINGE_ARM_INSET
+  const y1 = yAxis + R
+  // (Top kept 0.37 mm below the barrel's centre line so the plate's edges never sit exactly
+  // on a barrel vertex line — edge-on contact between shells is non-manifold.)
+  const plateT = Math.min(wt, R + HINGE_DROP - 0.37)
+  const plate = translate([0, (y0 + y1) / 2, -wt + plateT / 2], cuboid({ size: [K, y1 - y0, plateT] }))
 
   const solids: any[] = []
   for (const xC of hingeXPositions(hingeCount, width)) {
-    solids.push(translate([xC, d2 + R, R], barrelWithStubs))
-    solids.push(translate([xC, d2 + R, R], arm))
+    const x = -xC // the lid is flipped about Y when closed
+    solids.push(translate([x, yAxis, zOrigin], barrelWithStubs))
+    solids.push(translate([x, 0, 0], plate))
   }
   return mergeSolids(solids)
 }

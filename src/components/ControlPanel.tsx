@@ -7,7 +7,7 @@ import { SliderField } from './ui/slider-field'
 import { SwitchRow } from './ui/switch'
 import { StartFromDialog } from './StartFromDialog'
 import { DividerEditor } from './DividerEditor'
-import { BoxParams, dividerHeightMm, hasHinge, sleeveOuterDims, LID_PATTERNS } from '@/utils/boxGenerator'
+import { BoxParams, dividerHeightMm, hasHinge, bodyHeight, GF_BASE_H, GF_PITCH, GF_UNIT, hingeInsertMax, sleeveOuterDims, LID_PATTERNS } from '@/utils/boxGenerator'
 import { AppSettings } from '@/utils/projectStorage'
 import { AXIS_COLORS as AXIS, Closure, closureOf, frictionLipDepth } from '@/utils/boxLayout'
 import { FILAMENTS, formatGrams } from '@/utils/filament'
@@ -23,6 +23,7 @@ interface ControlPanelProps {
   lidVolume: number
   onExportBox: () => void
   onExportLid: () => void
+  onExportBaseplate: () => void
   // The box and lid/sleeve fit on the plate at the same time (each may fit alone but not together)
   partsFitTogether: boolean
 }
@@ -48,7 +49,7 @@ const labelCls = 'text-xs text-muted-foreground'
 
 export function ControlPanel({
   params, onParamsChange, previewInPlace, onPreviewInPlaceChange,
-  settings, onSettingsChange, boxVolume, lidVolume, onExportBox, onExportLid, partsFitTogether,
+  settings, onSettingsChange, boxVolume, lidVolume, onExportBox, onExportLid, onExportBaseplate, partsFitTogether,
 }: ControlPanelProps) {
   const [activeTab, setActiveTab] = useState<TabType>('box')
   const [startFromOpen, setStartFromOpen] = useState(false)
@@ -140,10 +141,11 @@ export function ControlPanel({
   }
 
   const isSleeveStyle = closure === 'sleeve'
-  // Hinged lids are flat — no lip, no tolerance
-  const showTolerance = closure === 'sleeve' || closure === 'lid'
+  // Hinged lids are flat unless they have an insert rim; tolerance only matters for that rim
+  const showTolerance = closure === 'sleeve' || closure === 'lid' || (closure === 'hinged' && params.hingeInsertDepth > 0)
   const toleranceValue = isSleeveStyle ? params.sleeveTolerance : params.lidTolerance
   const lipDepth = frictionLipDepth(params)
+  const insertMax = hingeInsertMax(params)
 
   // ── Plate fit ───────────────────────────────────────────────────────────────
   const bedX = settings.printerBedX
@@ -166,11 +168,11 @@ export function ControlPanel({
   // Box dims are OUTER; interior loses two walls in X/Z and only the floor in Y
   const innerW = Math.max(0, params.width - 2 * params.wallThickness)
   const innerD = Math.max(0, params.depth - 2 * params.wallThickness)
-  const innerH = Math.max(0, params.height - params.wallThickness - lipDepth)
+  const innerH = Math.max(0, bodyHeight(params) - params.wallThickness - lipDepth)
   const fmt = (n: number) => String(Math.round(n * 10) / 10)
   const compartments = (params.divisionsX.length + 1) * (params.divisionsZ.length + 1)
   const hasDividers = params.divisionsX.length + params.divisionsZ.length > 0
-  const fullDividerHeight = Math.max(0.5, params.height - params.wallThickness)
+  const fullDividerHeight = Math.max(0.5, bodyHeight(params) - params.wallThickness)
 
   const patternLabel = (value: string) => LID_PATTERNS.find(p => p.value === value)?.label ?? value
   // Dividers the finger slots can reach: X slots notch dividers along the width, Z slots along the depth
@@ -231,12 +233,55 @@ export function ControlPanel({
 
       {activeTab === 'box' && (
         <div className="space-y-4">
-          <Button variant="secondary" className="w-full justify-start text-muted-foreground" onClick={() => setStartFromOpen(true)}>
-            <Wand2 className="mr-2 h-4 w-4" />
-            Start from volume, items or divisions…
-          </Button>
+          {!params.gridfinity && (
+            <Button variant="secondary" className="w-full justify-start text-muted-foreground" onClick={() => setStartFromOpen(true)}>
+              <Wand2 className="mr-2 h-4 w-4" />
+              Start from volume, items or divisions…
+            </Button>
+          )}
 
           <div className="space-y-0">
+            <div className="space-y-2 pb-3">
+              <span className={labelCls}>Box type</span>
+              <Segmented
+                aria-label="Box type"
+                value={params.gridfinity ? 'gridfinity' : 'standard'}
+                onChange={(v) => onParamsChange({ ...params, gridfinity: v === 'gridfinity' })}
+                options={[
+                  { value: 'standard', label: 'Custom size' },
+                  { value: 'gridfinity', label: 'Gridfinity' },
+                ]}
+              />
+              <p className="text-xs text-muted-foreground">
+                {params.gridfinity
+                  ? `A bin that fits Gridfinity baseplates: its size is set in grid cells on a ${GF_PITCH} mm pitch, with a standard foot. Print a baseplate from the Print tab.`
+                  : 'Any size you like, set in millimetres.'}
+              </p>
+            </div>
+
+            {params.gridfinity && (
+              <Group
+                title="Grid size"
+                defaultOpen
+                summary={`${params.gridX}×${params.gridY} · ${params.gridUnits}u`}
+              >
+                <SliderField label="Cells wide" min={1} max={10} step={1} color={AXIS.width} value={params.gridX}
+                  onChange={(v) => updateParam('gridX', v)} />
+                <SliderField label="Cells deep" min={1} max={10} step={1} color={AXIS.depth} value={params.gridY}
+                  onChange={(v) => updateParam('gridY', v)} />
+                <SliderField label="Height units" min={2} max={24} step={1} color={AXIS.height} value={params.gridUnits}
+                  onChange={(v) => updateParam('gridUnits', v)}
+                  hint={`Each unit is ${GF_UNIT} mm, counted from the bottom of the foot. No stacking lip is added.`} />
+                <div className="rounded-md border bg-background/40 px-3 py-2 text-xs text-muted-foreground">
+                  Outer size{' '}
+                  <span className="font-mono text-foreground">{fmt(params.width)} × {fmt(params.depth)} × {fmt(params.height)}</span> mm
+                  {' '}· usable interior{' '}
+                  <span className="font-mono text-foreground">{fmt(innerW)} × {fmt(innerD)} × {fmt(innerH)}</span> mm
+                </div>
+              </Group>
+            )}
+
+            {!params.gridfinity && (
             <Group title="Size" defaultOpen summary={`${fmt(params.width)}×${fmt(params.depth)}×${fmt(params.height)} mm`}>
               <Segmented
                 aria-label="Dimensions are"
@@ -310,6 +355,7 @@ export function ControlPanel({
                 {lipDepth > 0 && <> · {params.lidHeight} mm lid lip included</>}
               </div>
             </Group>
+            )}
 
             <Group
               title="Dividers"
@@ -421,7 +467,7 @@ export function ControlPanel({
                   <SliderField label="Slot width" unit="mm" min={5} max={60} value={params.fingerSlotWidth}
                     onChange={(value) => updateParam('fingerSlotWidth', value)} />
                   <SliderField label="Slot depth" unit="mm" min={2}
-                    max={Math.max(2, params.height - params.wallThickness - 0.5)} step={0.5}
+                    max={Math.max(2, bodyHeight(params) - params.wallThickness - 0.5)} step={0.5}
                     value={params.fingerSlotDepth}
                     onChange={(value) => updateParam('fingerSlotDepth', value)}
                     hint="How far down from the top edge the notch reaches. It always stops just above the floor." />
@@ -477,8 +523,8 @@ export function ControlPanel({
               {{
                 none: 'Open top.',
                 lid: 'A cap that sits on top of the box.',
-                sleeve: 'An open-front cover the box slides in and out of, like a matchbox drawer.',
-                hinged: 'A flat lid that snaps onto hinge knuckles on the back edge. Nothing extra to print.',
+                sleeve: 'An open-ended cover the box slides in and out of, like a matchbox drawer.',
+                hinged: 'A lid that snaps onto hinge knuckles on the back edge. Nothing extra to print.',
               }[closure]}
             </p>
           </div>
@@ -490,6 +536,27 @@ export function ControlPanel({
                 checked={previewInPlace}
                 onChange={onPreviewInPlaceChange}
               />
+
+              {isSleeveStyle && (
+                <div className="space-y-2">
+                  <span className={labelCls}>Slide direction</span>
+                  <Segmented
+                    aria-label="Sleeve slide axis"
+                    value={params.sleeveAxis}
+                    onChange={(v) => updateParam('sleeveAxis', v)}
+                    options={[
+                      { value: 'width', label: 'Sides', color: AXIS.width },
+                      { value: 'depth', label: 'Front', color: AXIS.depth },
+                      { value: 'height', label: 'Top', color: AXIS.height },
+                    ]}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Which way the box slides in and out: through the front, through the sides, or down from the top. The colours match the size sliders.
+                    {params.sleeveAxis === 'height' && ' Top makes a cover that slides down over the box; print it open side down.'}
+                    {params.sleeveAxis === 'height' && params.gridfinity && ` The cover stops ${GF_BASE_H} mm above the foot so it clears a baseplate.`}
+                  </p>
+                </div>
+              )}
 
               <div className="space-y-0">
                 {showTolerance && (
@@ -509,7 +576,7 @@ export function ControlPanel({
                         onChange={(value) => updateParam(isSleeveStyle ? 'sleeveTolerance' : 'lidTolerance', value)}
                         hint={isSleeveStyle
                           ? 'Gap between the box and the sleeve interior. Lower is tighter; raise it if the box is hard to slide.'
-                          : "Gap between the lid's lip and the box walls. Lower is tighter; raise it if the lid is hard to put on."}
+                          : `Gap between the lid's ${closure === 'hinged' ? 'insert' : 'lip'} and the box walls. Lower is tighter; raise it if the lid is hard to put on${closure === 'hinged' ? ' or to swing open' : ''}.`}
                       />
                     )}
                     {closure === 'lid' && (
@@ -544,8 +611,12 @@ export function ControlPanel({
                     <SliderField label="Axle diameter" unit="mm" min={2} max={5} step={0.5} value={params.hingePinDiameter}
                       onChange={(value) => updateParam('hingePinDiameter', value)}
                       hint="Diameter of the snap axles on the lid. Thicker is stronger but needs more force to click in." />
+                    <SliderField label="Insert depth" unit="mm" min={0} max={Math.max(0.5, Math.min(15, insertMax))} step={0.5}
+                      value={Math.min(params.hingeInsertDepth, Math.max(0.5, Math.min(15, insertMax)))}
+                      onChange={(value) => updateParam('hingeInsertDepth', value)}
+                      hint={`A rim under the lid that drops inside the box to keep it centred. 0 keeps the lid flat. It costs that much interior height. The lid swings on the back edge, so the deepest rim that still opens is ${insertMax} mm for this fit tolerance and wall thickness; a looser tolerance or thinner walls allow more.`} />
                     <p className="text-xs text-muted-foreground">
-                      Press the lid's axle stubs straight down into the box knuckles until they click. Pull straight up to remove.
+                      Press the lid's axle stubs straight down into the box knuckles until they click. Pull straight up to remove. The lid prints face-down, no supports needed.
                     </p>
                   </Group>
                 )}
@@ -704,6 +775,32 @@ export function ControlPanel({
               ))}
             </div>
             <p className="text-xs text-muted-foreground">Weights are for a solid part; real prints use less with infill.</p>
+          </Group>
+
+          <Group
+            title="Gridfinity baseplate"
+            summary={`${params.baseplateX}×${params.baseplateY} cells`}
+          >
+            <SliderField label="Cells wide" min={1} max={8} step={1} color={AXIS.width} value={params.baseplateX}
+              onChange={(v) => updateParam('baseplateX', v)} />
+            <SliderField label="Cells deep" min={1} max={8} step={1} color={AXIS.depth} value={params.baseplateY}
+              onChange={(v) => updateParam('baseplateY', v)} />
+            <div className="flex items-center gap-3 rounded-lg border px-3 py-2 text-sm">
+              <span className="font-mono text-xs text-muted-foreground">
+                {params.baseplateX * GF_PITCH} × {params.baseplateY * GF_PITCH} × 4.65 mm
+              </span>
+              <button
+                className="ml-auto p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent"
+                aria-label="Export baseplate STL"
+                title="Export baseplate STL"
+                onClick={onExportBaseplate}
+              >
+                <Download className="h-4 w-4" />
+              </button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              A plain baseplate (no magnets or screws) on the {GF_PITCH} mm grid, open at the bottom. It exports on its own and is not shown in the preview.
+            </p>
           </Group>
         </div>
       )}

@@ -4,6 +4,54 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 with date-based entries since the project has no version releases.
 
+## 2026-11-16
+
+### Added
+- **Gridfinity bins and baseplates.** A new **Box type** selector (Custom size / Gridfinity)
+  at the top of the Box tab turns the box into a bin, swapping the Size controls
+  for the grid controls: its size locks to the grid (cells wide ×
+  deep on a 42 mm pitch, bins 0.5 mm smaller, height in 7 mm units counted from
+  the bottom of the foot) and a standard foot is added under each cell so it
+  clicks into a Gridfinity baseplate. The foot is separate closed shells added to
+  the box export, like the hinge knuckles. Everything else (dividers, patterns,
+  lids, hinges) works on the bin body, whose height is the total minus the foot.
+  The Print tab gets a **Gridfinity baseplate** group: 1–8 cells each way, a
+  plain baseplate (no magnets or screws, open at the bottom) exported as its own
+  STL; it is not shown in the preview. No stacking lip is modelled. Dimensions
+  follow the published profile but are **untested against real baseplates**;
+  expect to tune the 0.2 mm top rim and socket clearances.
+  A sleeve sliding along **Top** on a Gridfinity bin is 4.65 mm shorter, so its
+  open end stops at the top of the baseplate instead of colliding with it.
+
+- **Hinged lids can have an insert rim, and now print face-down with no
+  supports.** A new **Insert depth** slider (0–15 mm, default 0 = no rim) adds a
+  rim under the lid that drops inside the box to keep it centred. It uses the
+  lid's fit tolerance, cuts notches for tall dividers, keeps cutout patterns
+  clear of the rim, and is counted in the interior-height readout. To make that
+  printable the hinge was reworked: the barrels now sit behind the back wall with
+  their tops level with the lid's outer face (they used to stand above it), and
+  the lid knuckle rests on a plate that continues the lid slab. The hinged lid
+  therefore uses the same print orientation as the cap lid (outer face on the
+  bed, rim pointing up, text mirrored), and the exported lid is the flipped part.
+  Barrels sit 0.3 mm off the back wall. The opening swing is checked
+  against the box for walls from 1 to 10 mm (`pnpm run check:hinge`): with thick
+  walls the box knuckle arm no longer pokes into the lid's back edge above the
+  rim, and the lid plate stops at the barrel's centre line instead of hanging
+  the full wall thickness. The insert rim drops its back segment, its side rims
+  stop short of the back wall, and **Insert depth** is capped at the deepest rim
+  that still opens for the current fit tolerance and wall thickness (shown in
+  the slider's tooltip), because the front of the rim moves toward the front
+  wall as the lid lifts. Hinge fit values are still untested on
+  real prints, and **existing hinged prints are not compatible** with the new
+  hinge, so reprint box and lid together.
+
+- **Sleeves can slide along any axis.** A new **Slide direction** control
+  (Sides / Front / Top, default Front, coloured like the width, depth and height sliders) sets the
+  axis the box slides along inside the sleeve. Which end is open doesn't matter,
+  since the mirrored sleeve is the same part turned around. The sleeve is built
+  once and rotated, so patterns, the finger cutout and text all carry over; along
+  Top it is a cover open at the bottom with its closed end (and text) on top. Preview-in-place and plate arrangement follow the axis.
+
 ## 2026-10-27
 
 ### Changed

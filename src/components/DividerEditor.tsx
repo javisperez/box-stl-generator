@@ -108,9 +108,19 @@ export function DividerEditor({ params, onChange }: DividerEditorProps) {
     setSelected({ axis, index: next.indexOf(value) })
   }
 
+  // Inline two-step confirm (native confirm() is suppressed in some embedded browsers,
+  // which silently made Clear all do nothing). Resets itself after a few seconds.
+  const [confirmingClear, setConfirmingClear] = useState(false)
+  useEffect(() => {
+    if (!confirmingClear) return
+    const t = setTimeout(() => setConfirmingClear(false), 3000)
+    return () => clearTimeout(t)
+  }, [confirmingClear])
+
   const clearAll = () => {
     const total = xs.length + zs.length
-    if (total > 2 && !confirm(`Remove all ${total} dividers?`)) return
+    if (total > 2 && !confirmingClear) { setConfirmingClear(true); return }
+    setConfirmingClear(false)
     onChange({ divisionsX: [], divisionsZ: [] })
     setSelected(null)
   }
@@ -364,7 +374,7 @@ export function DividerEditor({ params, onChange }: DividerEditorProps) {
         </Button>
         <Button variant="ghost" size="sm" disabled={xs.length + zs.length === 0} onClick={clearAll}>
           <Eraser className="mr-1.5 h-4 w-4" />
-          Clear all
+          {confirmingClear ? `Remove all ${xs.length + zs.length}?` : 'Clear all'}
         </Button>
       </div>
     </div>

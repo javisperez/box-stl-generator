@@ -2,7 +2,7 @@ import { cn } from '@/lib/utils'
 
 interface SegmentedProps<T extends string | number> {
   value: T
-  options: { value: T; label: string }[]
+  options: { value: T; label: string; color?: string }[]
   onChange: (value: T) => void
   className?: string
   'aria-label'?: string
@@ -30,6 +30,9 @@ export function Segmented<T extends string | number>({ value, options, onChange,
               : 'text-muted-foreground hover:text-foreground'
           )}
         >
+          {o.color && (
+            <span aria-hidden className="inline-block size-1.5 rounded-full mr-1.5 align-middle" style={{ background: o.color }} />
+          )}
           {o.label}
         </button>
       ))}

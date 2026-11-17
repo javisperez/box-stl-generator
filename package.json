@@ -11,6 +11,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "check:stl": "vite-node scripts/check-stl.ts",
+    "check:hinge": "vite-node scripts/check-hinge.ts",
     "prepare": "git config core.hooksPath .githooks || true"
   },
   "dependencies": {

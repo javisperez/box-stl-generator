@@ -19,6 +19,9 @@ import {
   generateLid,
   generateSleeve,
   generateBoxHingeKnuckles,
+  generateBinFeet,
+  generateBaseplate,
+  applyGridfinity,
   generateLidHingeKnuckles,
 } from '../src/utils/boxGenerator'
 import { DEFAULTS } from '../src/utils/projectStorage'
@@ -311,6 +314,62 @@ const checks: Check[] = [
       return [generateLid(p), generateLidHingeKnuckles(p)]
     },
   },
+  {
+    name: 'lid · hinged + insert rim (dividers, pattern)',
+    build: () => {
+      const p = { ...base, includeLid: true, includeHinge: true, hingeInsertDepth: 4, divisionsX: [30], divisionsZ: [50], lidPattern: 'hexagons' as const }
+      return [generateLid(p), generateLidHingeKnuckles(p)]
+    },
+  },
+  {
+    name: 'lid · hinged + insert rim + text embossed',
+    build: () => {
+      const p = { ...base, includeLid: true, includeHinge: true, hingeInsertDepth: 4, lidText: 'H', lidTextStyle: 'embossed' as const }
+      return [generateLid(p, syntheticTextGeometry(p.lidTextDepth)), generateLidHingeKnuckles(p)]
+    },
+  },
+  {
+    name: 'box · hinged, thick walls (10 mm)',
+    build: () => {
+      const p = { ...base, wallThickness: 10, divisionThickness: 10, includeLid: true, includeHinge: true, hingeInsertDepth: 1.5 }
+      return [generateBox(p), generateBoxHingeKnuckles(p)]
+    },
+  },
+  {
+    name: 'lid · hinged, thick walls (10 mm) + insert rim',
+    build: () => {
+      const p = { ...base, wallThickness: 10, divisionThickness: 10, includeLid: true, includeHinge: true, hingeInsertDepth: 1.5 }
+      return [generateLid(p), generateLidHingeKnuckles(p)]
+    },
+  },
+  {
+    name: 'gridfinity · bin 2×1 (body + feet)',
+    build: () => {
+      const p = applyGridfinity({ ...base, gridfinity: true, gridX: 2, gridY: 1, gridUnits: 4, divisionsX: [50] })
+      return [generateBox(p), generateBinFeet(p)]
+    },
+  },
+  {
+    name: 'gridfinity · bin 1×1 + pattern + chamfer',
+    build: () => {
+      const p = applyGridfinity({ ...base, gridfinity: true, gridX: 1, gridY: 1, gridUnits: 5, boxPattern: 'hexagons' as const, chamferSize: 1.5 })
+      return [generateBox(p), generateBinFeet(p)]
+    },
+  },
+  {
+    name: 'gridfinity · baseplate 3×2',
+    build: () => [generateBaseplate(3, 2)],
+  },
+  ...(['width', 'height'] as const).map(o => ({
+    name: `sleeve · slides along ${o} · pattern + text engraved`,
+    build: () => {
+      const p = {
+        ...base, includeLid: true, lidStyle: 'sleeve' as const, sleeveAxis: o,
+        lidPattern: 'circles' as const, lidText: 'H', lidTextStyle: 'engraved' as const,
+      }
+      return [generateSleeve(p, syntheticTextGeometry(p.lidTextDepth))]
+    },
+  })),
   {
     name: 'sleeve · plain + cutout',
     build: () => [generateSleeve({ ...base, includeLid: true, lidStyle: 'sleeve' })],

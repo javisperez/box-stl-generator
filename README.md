@@ -16,6 +16,7 @@ A web-based parametric box generator for 3D printing. Design custom boxes with c
   - **Lid** — cap with a lip that hangs into the box, with configurable lip height and printer-fit tolerance
   - **Drawer sleeve** — open-front cover the box slides into, with optional finger notches
   - **Hinged lid** — flat lid with pin-less snap hinges (1–3 along the back edge); the printed lid snaps into the box, no assembly hardware
+- **Gridfinity** — turn the box into a bin that fits Gridfinity baseplates (42 mm grid, 7 mm height units, standard foot), and export a plain baseplate of any size up to 8×8 cells
 - **Lid decoration** — engraved or embossed text/emoji (rotatable in 90° steps) and the same cutout patterns through the lid or sleeve
 - **Start from…** — build a layout from a target volume, from the size and count of the items you want to store, or from exact compartment depths; the compartments come out at exactly the sizes you ask for
 - **Printer fit check** — pick from built-in printer presets (Bambu Lab, Prusa, Creality, Voron, Elegoo) or a custom plate size; the plate is outlined in the preview. **Auto-arrange** lays the box and lid next to each other on the plate (turning a part a quarter turn only when that helps) and tells you whether they fit together
@@ -69,7 +70,7 @@ Pushes to `main` deploy automatically to GitHub Pages via [deploy.yml](.github/w
 
 Choose **None**, **Lid**, **Sleeve** or **Hinged**, and toggle **preview in place** to see the parts assembled. Options depend on the style:
 
-- **Fit** — **tolerance** (0.1–1 mm) and **lip height** (2–20 mm) for a lid; sleeves have their own sliding-fit tolerance and optional finger cutouts
+- **Fit** — **tolerance** (0.1–1 mm) and **lip height** (2–20 mm) for a lid; sleeves have their own sliding-fit tolerance, optional finger cutouts and a **slide direction** (front, sides or top); hinged lids can add an **insert depth** rim that seats inside the box
 - **Hinge** — 1–3 pin-less snap hinges with adjustable barrel and axle diameter; hinged lids are flat (no lip) so they print without supports
 - **Cutouts** — a pattern through the lid cap or sleeve walls, with adjustable feature size and spacing
 - **Text** — 8–40 mm, 0.3–2 mm deep, engraved or embossed, rotatable 0/90/180/270°
