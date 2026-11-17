@@ -7,6 +7,10 @@ with date-based entries since the project has no version releases.
 ## 2026-11-16
 
 ### Added
+- **Cover height for top-sliding sleeves.** With the sleeve's slide direction set to
+  **Top**, a new Cover height slider sets how far down the box the cover reaches.
+  Max covers the whole box (the previous behaviour); less makes a shallow cover that
+  works like a lid. The in-place preview offset follows the shorter cover.
 - **Gridfinity bins and baseplates.** A new **Box type** selector (Custom size / Gridfinity)
   at the top of the Box tab turns the box into a bin, swapping the Size controls
   for the grid controls: its size locks to the grid (cells wide ×

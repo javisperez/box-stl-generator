@@ -45,6 +45,7 @@ export const DEFAULTS: BoxParams = {
   sleeveTolerance: 0.3,
   sleeveCutout: true,
   sleeveAxis: 'depth' as const,
+  sleeveCoverHeight: 0,
   hingeInsertDepth: 0,
   gridfinity: false,
   gridX: 2,
@@ -114,6 +115,7 @@ export function normalizeParams(raw: unknown): BoxParams {
   p.divisionThickness = clampDivisionThickness(p.divisionThickness, p.wallThickness)
   if (p.lidStyle !== 'sleeve') p.lidStyle = 'lid'
   if (!SLEEVE_AXES.includes(p.sleeveAxis)) p.sleeveAxis = 'depth'
+  p.sleeveCoverHeight = Number.isFinite(p.sleeveCoverHeight) ? Math.max(0, p.sleeveCoverHeight) : 0
   p.hingeInsertDepth = Math.min(Math.max(Number(p.hingeInsertDepth) || 0, 0), 20)
   if (p.dimensionMode !== 'interior') p.dimensionMode = 'exterior'
   p.interiorTolerance = Math.min(Math.max(Number(p.interiorTolerance) || 0, 0), 20)

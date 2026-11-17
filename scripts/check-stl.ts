@@ -371,6 +371,16 @@ const checks: Check[] = [
     },
   })),
   {
+    name: 'sleeve · top cover 5 mm shallow + pattern',
+    build: () => {
+      const p = {
+        ...base, includeLid: true, lidStyle: 'sleeve' as const, sleeveAxis: 'height' as const,
+        sleeveCoverHeight: 5, lidPattern: 'circles' as const,
+      }
+      return [generateSleeve(p)]
+    },
+  },
+  {
     name: 'sleeve · plain + cutout',
     build: () => [generateSleeve({ ...base, includeLid: true, lidStyle: 'sleeve' })],
   },

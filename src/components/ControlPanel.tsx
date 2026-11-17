@@ -7,7 +7,7 @@ import { SliderField } from './ui/slider-field'
 import { SwitchRow } from './ui/switch'
 import { StartFromDialog } from './StartFromDialog'
 import { DividerEditor } from './DividerEditor'
-import { BoxParams, dividerHeightMm, hasHinge, bodyHeight, GF_BASE_H, GF_PITCH, GF_UNIT, hingeInsertMax, sleeveOuterDims, LID_PATTERNS } from '@/utils/boxGenerator'
+import { BoxParams, dividerHeightMm, hasHinge, bodyHeight, GF_BASE_H, GF_PITCH, GF_UNIT, hingeInsertMax, sleeveCoverMax, sleeveOuterDims, LID_PATTERNS } from '@/utils/boxGenerator'
 import { AppSettings } from '@/utils/projectStorage'
 import { AXIS_COLORS as AXIS, Closure, closureOf, frictionLipDepth } from '@/utils/boxLayout'
 import { FILAMENTS, formatGrams } from '@/utils/filament'
@@ -555,6 +555,23 @@ export function ControlPanel({
                     {params.sleeveAxis === 'height' && ' Top makes a cover that slides down over the box; print it open side down.'}
                     {params.sleeveAxis === 'height' && params.gridfinity && ` The cover stops ${GF_BASE_H} mm above the foot so it clears a baseplate.`}
                   </p>
+                  {params.sleeveAxis === 'height' && (() => {
+                    const coverMax = sleeveCoverMax(params)
+                    const coverMin = Math.min(5, coverMax)
+                    const cover = params.sleeveCoverHeight > 0 ? Math.min(params.sleeveCoverHeight, coverMax) : coverMax
+                    return (
+                      <SliderField
+                        label="Cover height"
+                        unit="mm"
+                        min={coverMin}
+                        max={coverMax}
+                        step={0.5}
+                        value={cover}
+                        onChange={(v) => updateParam('sleeveCoverHeight', v >= coverMax ? 0 : v)}
+                        hint="How far down the box the cover reaches. Max covers the whole box; less works like a lid."
+                      />
+                    )
+                  })()}
                 </div>
               )}
 

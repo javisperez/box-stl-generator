@@ -65,6 +65,7 @@ export interface BoxParams {
   sleeveTolerance: number    // gap between box and sleeve interior for sliding fit
   sleeveCutout: boolean      // finger notches at the sleeve opening to grab the box
   sleeveAxis: SleeveAxis     // axis the box slides along inside the sleeve (the sleeve is open at one end of it)
+  sleeveCoverHeight: number  // Top direction only: how much of the box height the cover reaches, mm (0 = all of it)
   gridfinity: boolean        // box is a Gridfinity bin: size snaps to the grid and a foot is added
   gridX: number              // bin footprint in grid cells (42 mm pitch)
   gridY: number
@@ -1389,6 +1390,18 @@ export function sleeveSeatHeight(params: BoxParams): number {
   return params.gridfinity && params.sleeveAxis === 'height' ? GF_BASE_H : 0
 }
 
+// Most of the box height a top-sliding cover can reach
+export function sleeveCoverMax(params: BoxParams): number {
+  return Math.max(0, params.height - sleeveSeatHeight(params))
+}
+
+// Box height the top-sliding cover actually wraps (a shallow cover works like a lid)
+function sleeveCoverDepth(params: BoxParams): number {
+  const max = sleeveCoverMax(params)
+  const c = params.sleeveCoverHeight
+  return c > 0 ? Math.min(c, max) : max
+}
+
 // The sleeve is always built in a canonical frame (open at -Y, closed back at
 // +Y, label face +Z) and then rotated so its opening faces the chosen side.
 // canon* helpers give the box's size along the canonical axes and the sleeve's
@@ -1398,7 +1411,7 @@ function sleeveCanon(params: BoxParams): { w: number; d: number; h: number } {
   const o = params.sleeveAxis
   // Gridfinity bin sliding under a cover from the top: the foot sits in the baseplate,
   // so the cover can only reach the plate's top face and skips that much height.
-  const [bw, bd, bh] = o === 'height' ? [width, height - sleeveSeatHeight(params), depth]
+  const [bw, bd, bh] = o === 'height' ? [width, sleeveCoverDepth(params), depth]
     : o === 'width' ? [depth, width, height]
     : [width, depth, height]
   return { w: bw + 2 * tol + 2 * wt, d: bd + tol + wt, h: bh + 2 * tol + 2 * wt }
@@ -1431,7 +1444,11 @@ export function sleeveLabelDims(params: BoxParams): { w: number; d: number } {
 // Where the sleeve's centre sits relative to the box centre with the box slid
 // fully in (box against the closed end, tolerance gap at rest)
 export function sleeveInPlaceOffset(params: BoxParams): [number, number, number] {
-  return sleeveToWorld(params.sleeveAxis, [0, (params.wallThickness + params.sleeveTolerance + sleeveSeatHeight(params)) / 2, 0])
+  // Box top (or back) meets the closed end plus the rest gap; the sleeve's own
+  // canonical depth tells how far its centre sits from the box centre.
+  const { wallThickness: wt, sleeveTolerance: tol, sleeveAxis: o } = params
+  const boxAlongY = o === 'height' ? params.height : o === 'width' ? params.width : params.depth
+  return sleeveToWorld(o, [0, boxAlongY / 2 + tol + wt - sleeveCanon(params).d / 2, 0])
 }
 
 /**
@@ -1498,6 +1515,13 @@ function sleeveWallHoles(params: BoxParams, backExclusions: Rect2[] = []): any |
   return unionAll(solids)
 }
 
+// Finger notch radius: capped so the notch never eats through the closed back wall
+// of a shallow cover (0 = no room for a notch)
+function sleeveNotchRadius(boxWidth: number, outerD: number, wt: number): number {
+  const r = Math.min(boxWidth * 0.3, 10, outerD - wt - 2)
+  return r >= 2 ? r : 0
+}
+
 export function generateSleeve(params: BoxParams, rawText?: any): any {
   const { wallThickness: wt, sleeveTolerance: tol, sleeveCutout, lidTextStyle, lidTextDepth } = params
   const axis: SleeveAxis = SLEEVE_AXES.includes(params.sleeveAxis) ? params.sleeveAxis : 'depth'
@@ -1532,10 +1556,10 @@ export function generateSleeve(params: BoxParams, rawText?: any): any {
   const cavity = cuboid({ size: [innerW, cavityD + 1, innerH] })
   sleeve = subtract(sleeve, translate([0, -(wt + 1) / 2, 0], cavity))
 
-  if (sleeveCutout) {
+  if (sleeveCutout && sleeveNotchRadius(width, outerD, wt) > 0) {
     // Vertical cylinder centered on the front face: leaves matching semicircular
     // notches in the top and bottom walls (pinch grip, works in any orientation).
-    const notchR = Math.min(width * 0.3, 10)
+    const notchR = sleeveNotchRadius(width, outerD, wt)
     const notch = cylinder({ radius: notchR, height: outerH + 2, segments: 48 })
     sleeve = subtract(sleeve, translate([0, -outerD / 2, 0], notch))
   }
@@ -1563,8 +1587,8 @@ export function generateSleeve(params: BoxParams, rawText?: any): any {
   // the back wall, the sides, the finger notch, and the text.
   if (params.lidPattern !== 'none') {
     const exclusions: Rect2[] = []
-    if (sleeveCutout) {
-      const notchR = Math.min(width * 0.3, 10)
+    if (sleeveCutout && sleeveNotchRadius(width, outerD, wt) > 0) {
+      const notchR = sleeveNotchRadius(width, outerD, wt)
       exclusions.push({ x0: -notchR - 1.5, x1: notchR + 1.5, y0: -outerD / 2 - 1, y1: -outerD / 2 + notchR + 1.5 })
     }
     if (textGeometry && !textOnBack) {
