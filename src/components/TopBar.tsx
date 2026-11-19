@@ -6,6 +6,7 @@ import {
 import { Button } from './ui/button'
 import { BoxParams } from '@/utils/boxGenerator'
 import { SavedProject, buildShareLink } from '@/utils/projectStorage'
+import { track } from '@/utils/analytics'
 
 interface TopBarProps {
   params: BoxParams
@@ -57,6 +58,7 @@ export function TopBar({
   const handleCopyShareLink = async () => {
     try {
       await navigator.clipboard.writeText(buildShareLink(projectName.trim(), params))
+      track('share_link_copied')
       setLinkCopied(true)
       setTimeout(() => setLinkCopied(false), 2000)
     } catch {

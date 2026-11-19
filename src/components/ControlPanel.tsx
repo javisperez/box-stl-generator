@@ -11,6 +11,7 @@ import { BoxParams, dividerHeightMm, hasHinge, bodyHeight, GF_BASE_H, GF_PITCH, 
 import { AppSettings } from '@/utils/projectStorage'
 import { AXIS_COLORS as AXIS, Closure, closureOf, frictionLipDepth } from '@/utils/boxLayout'
 import { FILAMENTS, formatGrams } from '@/utils/filament'
+import { track } from '@/utils/analytics'
 
 interface ControlPanelProps {
   params: BoxParams
@@ -224,7 +225,7 @@ export function ControlPanel({
                 ? 'border-primary text-foreground'
                 : 'border-transparent text-muted-foreground hover:text-foreground'
             }`}
-            onClick={() => setActiveTab(tab)}
+            onClick={() => { setActiveTab(tab); track('tab_viewed', { tab }) }}
           >
             {label}
           </button>

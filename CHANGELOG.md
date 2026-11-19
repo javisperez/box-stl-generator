@@ -4,6 +4,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 with date-based entries since the project has no version releases.
 
+## 2026-11-19
+
+### Added
+- **Google Analytics with a consent banner.** The deploy workflow injects the GA4
+  snippet at build time through `pages-analytics`, from the `ANALYTICS_ID`
+  repository variable (a `G-…` measurement ID), so forks, local builds and the dev
+  server are never tracked. A small Accept / Decline card appears bottom-right
+  (only when analytics is deployed and no choice is saved), and the footer's
+  **Analytics settings** link reopens it. The choice is kept in `localStorage` by the package.
+  The snippet is injected in `pages-analytics` consent mode (Google Consent Mode v2,
+  denied until the banner grants it), so nothing is stored until a visitor accepts;
+  until then Google only receives cookieless pings.
+- **Usage events** (typed in `src/utils/analytics.ts`, no-ops without the snippet):
+  `app_opened`, `stl_exported` (part, lid style, hinged, gridfinity), project
+  save/load/duplicate/delete/new, JSON export/import, `share_link_copied`,
+  `tab_viewed`, `feature_changed` (discrete choices such as Gridfinity, lid style,
+  hinge, patterns; not sliders) and `view_mode_changed`. No project names, lid text
+  or file contents are sent. Add the `ANALYTICS_ID` variable under Settings →
+  Secrets and variables → Actions → Variables to turn it on.
+
 ## 2026-11-16
 
 ### Added

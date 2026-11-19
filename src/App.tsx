@@ -21,11 +21,14 @@ import {
 import { AlertTriangle } from 'lucide-react'
 import { formatGrams } from './utils/filament'
 import * as THREE from 'three'
+import { track, trackFeatureChanges, analyticsPresent, CONSENT_EVENT } from './utils/analytics'
+import { ConsentBanner } from './components/ConsentBanner'
 
 // A share link (#p=…) opens the app with that project loaded. Consumed once
 // at module load, before React mounts, so StrictMode double-rendering can't
 // read an already-cleared hash.
 const sharedProject = consumeShareLink()
+track('app_opened', { source: sharedProject ? 'share_link' : 'direct' })
 
 function App() {
   const [params, setParams] = useState<BoxParams>(() => sharedProject?.params ?? loadCurrentParams())
@@ -113,13 +116,22 @@ function App() {
   const stlName = (part: string) =>
     `${filePrefix ? filePrefix + '_' : ''}${part}_${params.width}x${params.depth}x${params.height}.stl`
 
-  const handleExport = () => {
+  const trackExport = (part: 'box' | 'lid' | 'sleeve' | 'baseplate' | 'all') =>
+    track('stl_exported', {
+      part,
+      lid_style: params.includeLid ? (params.lidStyle === 'sleeve' ? 'sleeve' : 'lid') : 'none',
+      hinged: params.includeLid && params.includeHinge && params.lidStyle !== 'sleeve',
+      gridfinity: params.gridfinity,
+    })
+
+  const handleExport = (count = true) => {
     if (!boxJscad) return
     const parts = [boxJscad, hingeBoxJscad, feetJscad].filter(Boolean)
     exportMultipleJscadToSTL(parts, stlName('box'))
+    if (count) trackExport('box')
   }
 
-  const handleExportLid = () => {
+  const handleExportLid = (count = true) => {
     if (!lidJscad) return
     const part = params.lidStyle === 'sleeve' ? 'sleeve' : 'lid'
     if (hingeLidJscad) {
@@ -127,6 +139,7 @@ function App() {
     } else {
       exportJscadToSTL(lidJscad, stlName(part))
     }
+    if (count) trackExport(part)
   }
 
   const handleExportBaseplate = () => {
@@ -134,17 +147,20 @@ function App() {
       generateBaseplate(params.baseplateX, params.baseplateY),
       `${filePrefix ? filePrefix + '_' : ''}gridfinity-baseplate_${params.baseplateX}x${params.baseplateY}.stl`,
     )
+    trackExport('baseplate')
   }
 
   const handleExportAll = () => {
-    handleExport()
-    if (params.includeLid) handleExportLid()
+    handleExport(false)
+    if (params.includeLid) handleExportLid(false)
+    trackExport('all')
   }
 
   const handleReset = () => {
     clearCurrentParams()
     setParams(DEFAULTS)
     setProjectName('')
+    track('project_created')
   }
 
   const handleSaveProject = (name: string) => {
@@ -152,6 +168,7 @@ function App() {
     setSavedProjects(next)
     persistProjects(next)
     setProjectName(name)
+    track('project_saved')
   }
 
   const handleLoadProject = (name: string) => {
@@ -159,6 +176,7 @@ function App() {
     if (project) {
       setParams({ ...project.params })
       setProjectName(project.name)
+      track('project_loaded')
     }
   }
 
@@ -171,6 +189,7 @@ function App() {
     const next = upsertProject(savedProjects, copyName, source.params)
     setSavedProjects(next)
     persistProjects(next)
+    track('project_duplicated')
   }
 
   const handleDeleteProject = (name: string) => {
@@ -178,14 +197,17 @@ function App() {
     const next = savedProjects.filter(p => p.name !== name)
     setSavedProjects(next)
     persistProjects(next)
+    track('project_deleted')
   }
 
   const handleExportJson = (name: string) => {
     exportProjectFile(name, params)
+    track('project_json_exported', { scope: 'single' })
   }
 
   const handleExportAllJson = () => {
     exportAllProjectsFile(savedProjects)
+    track('project_json_exported', { scope: 'library' })
   }
 
   const handleImportJson = async (file: File) => {
@@ -197,12 +219,15 @@ function App() {
         for (const p of imported.projects) next = upsertProject(next, p.name, p.params)
         setSavedProjects(next)
         persistProjects(next)
+        track('project_json_imported', { kind: 'library' })
         alert(`Imported ${imported.projects.length} project${imported.projects.length === 1 ? '' : 's'} into your library.`)
       } else {
         setParams(imported.params)
         if (imported.name) setProjectName(imported.name)
+        track('project_json_imported', { kind: 'project' })
       }
     } catch {
+      track('project_json_imported', { kind: 'invalid' })
       alert('Could not import this file — it does not look like a valid project JSON.')
     }
   }
@@ -344,7 +369,7 @@ function App() {
               aria-label="View"
               className="w-56 bg-card/90 backdrop-blur"
               value={settings.viewMode}
-              onChange={(viewMode) => setSettings({ ...settings, viewMode })}
+              onChange={(viewMode) => { track('view_mode_changed', { mode: viewMode }); setSettings({ ...settings, viewMode }) }}
               options={[
                 { value: 'perspective', label: 'Perspective' },
                 { value: 'isometric', label: 'Isometric' },
@@ -385,16 +410,16 @@ function App() {
           <div className="flex-1 lg:overflow-y-auto">
             <ControlPanel
               params={params}
-              onParamsChange={(next) => setParams(applyGridfinity(next))}
+              onParamsChange={(next) => { trackFeatureChanges(params, next); setParams(applyGridfinity(next)) }}
               previewInPlace={previewInPlace}
               onPreviewInPlaceChange={setPreviewInPlace}
               settings={settings}
               onSettingsChange={setSettings}
               boxVolume={boxVolume}
               lidVolume={lidVolume}
-              onExportBox={handleExport}
+              onExportBox={() => handleExport()}
               onExportBaseplate={handleExportBaseplate}
-              onExportLid={handleExportLid}
+              onExportLid={() => handleExportLid()}
               partsFitTogether={arrangement.fitsTogether}
             />
           </div>
@@ -408,6 +433,14 @@ function App() {
             <a href="https://github.com/javisperez/box-stl-generator" target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground whitespace-nowrap">Source on GitHub</a>
             {' · '}
             <a href="https://github.com/javisperez/box-stl-generator/blob/main/LICENSE" target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground whitespace-nowrap">Apache 2.0</a>
+            {analyticsPresent() && (
+              <>
+                {' · '}
+                <button type="button" className="underline hover:text-foreground whitespace-nowrap" onClick={() => window.dispatchEvent(new Event(CONSENT_EVENT))}>
+                  Analytics settings
+                </button>
+              </>
+            )}
             <div className="mt-2">
               <a href="https://ko-fi.com/G0U727FZNX" target="_blank" rel="noopener noreferrer">
                 <img
@@ -422,6 +455,7 @@ function App() {
           </footer>
         </aside>
       </div>
+      <ConsentBanner />
     </div>
   )
 }

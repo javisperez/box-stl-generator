@@ -37,6 +37,9 @@ jobs:
       - run: pnpm run build
         env:
           BASE_URL: /box-stl-generator/
+          # Repo variable (Settings → Secrets and variables → Actions → Variables).
+          # Unset on forks, so they ship without tracking.
+          ANALYTICS_ID: ${{ vars.ANALYTICS_ID }}
 
       - uses: actions/upload-pages-artifact@v3
         with:
